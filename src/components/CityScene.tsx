@@ -49,9 +49,8 @@ interface Props {
   accessibilityRoute: 'most-accessible' | 'balanced' | 'direct';
 }
 
-const LANE_WIDTH = 3.0;
-const SIDEWALK_WIDTH = 1.6; // each side — kept narrow so parallel roads (e.g. the two
-// carriageways of a divided road) don't visually overlap through their sidewalk halos
+const LANE_WIDTH = 3.4;
+const SIDEWALK_WIDTH = 2.4; // each side
 const ITEM_COLORS: Record<string, string> = {
   apartments: '#818cf8',
   park: '#22c55e',
@@ -70,11 +69,7 @@ function Road({ edge, edits, metric, armedTool, onPlace }: { edge: RoadEdge; edi
   const edit = edits.edgeEdits[edge.id];
   const lanes = Math.max(1, edge.baseLanes + (edit?.widenCount ?? 0));
   const width = lanes * LANE_WIDTH;
-  // A one-way edge is usually one carriageway of a divided road — it doesn't need a
-  // full sidewalk allocation on both sides (the median-facing side barely has one in
-  // reality), so give it a smaller halo than a normal two-way street.
-  const sidewalkWidth = edge.oneway ? SIDEWALK_WIDTH * 0.5 : SIDEWALK_WIDTH;
-  const sidewalkSpan = width + sidewalkWidth * 2;
+  const sidewalkSpan = width + SIDEWALK_WIDTH * 2;
   const geometry = useMemo(() => buildRoadRibbon(edge.points, width), [edge.points, width]);
   const sidewalkGeometry = useMemo(() => buildRoadRibbon(edge.points, sidewalkSpan), [edge.points, sidewalkSpan]);
   const color = congestionColor(metric?.congestion ?? 0);
