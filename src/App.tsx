@@ -1,6 +1,6 @@
 import { useEffect, useMemo, useState } from 'react';
 import { loadDistrict } from './lib/osm';
-import { computeMetricsAtHour, computeDerivedMetrics, computeDailyFlowSeries, aggregateMetrics } from './lib/costEngine';
+import { computeMetricsAtHour, computeDerivedMetrics, computeDailyFlowSeries, aggregateMetrics, distinctRoadTotal } from './lib/costEngine';
 import { computeScenarioRows, computeOverallScore } from './lib/scenario';
 import { generateAnalysis } from './lib/mockAI';
 import type { BuildingToolId, CityEdits, DistrictData, Mode } from './types';
@@ -123,6 +123,10 @@ export default function App() {
 
   const curAgg = aggregateMetrics(metricsAtHour);
   const baseAgg = aggregateMetrics(baselineMetricsAtHour);
+  // Distinct-road totals, not aggregateMetrics().effectiveFlow — that sums every OSM way
+  // fragment, double-counting the same physical traffic several times over.
+  const curTotalVehicles = distinctRoadTotal(district, metricsAtHour, (m) => m.effectiveFlow);
+  const baseTotalVehicles = distinctRoadTotal(district, baselineMetricsAtHour, (m) => m.effectiveFlow);
   const pctChange = (base: number, cur: number) => (base !== 0 ? ((cur - base) / Math.abs(base)) * 100 : 0);
   const co2Row = scenarioRows.find((r) => r.label === 'CO2 Emissions')!;
   const speedRow = scenarioRows.find((r) => r.label === 'Average Speed')!;
@@ -197,8 +201,8 @@ export default function App() {
                 <TimeControls hour={hour} onChange={setHour} playing={playing} onTogglePlay={() => setPlaying((p) => !p)} speed={speed} onSpeedChange={setSpeed} />
               </div>
               <SummaryMetricsStrip
-                totalVehicles={Math.round(curAgg.effectiveFlow)}
-                totalVehiclesDeltaPct={pctChange(baseAgg.effectiveFlow, curAgg.effectiveFlow)}
+                totalVehicles={Math.round(curTotalVehicles)}
+                totalVehiclesDeltaPct={pctChange(baseTotalVehicles, curTotalVehicles)}
                 avgSpeed={speedRow.proposed}
                 avgSpeedDeltaPct={pctChange(speedRow.baseline, speedRow.proposed)}
                 totalDelay={delayRow.proposed}

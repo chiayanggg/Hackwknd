@@ -1,5 +1,5 @@
 import type { CityEdits, DistrictData, EdgeMetrics } from '../types';
-import { aggregateMetrics } from './costEngine';
+import { aggregateMetrics, distinctRoadTotal } from './costEngine';
 
 const CO2_FACTOR = 0.02;
 const FUEL_FACTOR = 0.55;
@@ -13,16 +13,22 @@ export interface ScenarioRow {
   decimals: number;
 }
 
+// Length-weighted, not a plain average of per-fragment times — real roads are chopped
+// into many short OSM way fragments, and a naive average would let a 10m stub count the
+// same as a 300m stretch. Weighting by length gives "minutes to cover 1km at the
+// network's actual pace", which is what "Avg Travel Time" should mean.
 function avgTravelTimeMin(district: DistrictData, metrics: Map<string, EdgeMetrics>): number {
-  let total = 0;
-  let n = 0;
+  let weightedSpeedLengthSum = 0;
+  let totalLengthM = 0;
   for (const road of district.roads) {
     const m = metrics.get(road.id);
     if (!m) continue;
-    total += (road.lengthM / 1000 / Math.max(5, m.speed)) * 60;
-    n++;
+    weightedSpeedLengthSum += Math.max(5, m.speed) * road.lengthM;
+    totalLengthM += road.lengthM;
   }
-  return n ? total / n : 0;
+  if (totalLengthM === 0) return 0;
+  const weightedAvgSpeedKmh = weightedSpeedLengthSum / totalLengthM;
+  return (1 / weightedAvgSpeedKmh) * 60; // minutes to cover 1km at that speed
 }
 
 function maxQueue(metrics: Map<string, EdgeMetrics>): number {
@@ -31,16 +37,12 @@ function maxQueue(metrics: Map<string, EdgeMetrics>): number {
   return mx;
 }
 
-function totalDelayVehHr(metrics: Map<string, EdgeMetrics>): number {
-  let s = 0;
-  for (const m of metrics.values()) s += m.effectiveFlow * (m.waitingTimeSec / 3600);
-  return s;
+function totalDelayVehHr(district: DistrictData, metrics: Map<string, EdgeMetrics>): number {
+  return distinctRoadTotal(district, metrics, (m) => m.effectiveFlow * (m.waitingTimeSec / 3600));
 }
 
-function throughputVehHr(metrics: Map<string, EdgeMetrics>): number {
-  let s = 0;
-  for (const m of metrics.values()) s += m.throughputVehPerHr;
-  return s;
+function throughputVehHr(district: DistrictData, metrics: Map<string, EdgeMetrics>): number {
+  return distinctRoadTotal(district, metrics, (m) => m.throughputVehPerHr);
 }
 
 function clamp(v: number, min: number, max: number): number {
@@ -73,8 +75,8 @@ export function computeScenarioRows(district: DistrictData, edits: CityEdits, cu
     { label: 'Average Speed', unit: 'km/h', baseline: base.speed, proposed: cur.speed, higherIsBetter: true, decimals: 1 },
     { label: 'Avg Travel Time', unit: 'min', baseline: avgTravelTimeMin(district, baselineMetrics), proposed: avgTravelTimeMin(district, currentMetrics), higherIsBetter: false, decimals: 1 },
     { label: 'Max Queue', unit: 'm', baseline: maxQueue(baselineMetrics), proposed: maxQueue(currentMetrics), higherIsBetter: false, decimals: 0 },
-    { label: 'Total Delay', unit: 'veh-hr/h', baseline: totalDelayVehHr(baselineMetrics), proposed: totalDelayVehHr(currentMetrics), higherIsBetter: false, decimals: 0 },
-    { label: 'Throughput', unit: 'veh/hr', baseline: throughputVehHr(baselineMetrics), proposed: throughputVehHr(currentMetrics), higherIsBetter: true, decimals: 0 },
+    { label: 'Total Delay', unit: 'veh-hr/h', baseline: totalDelayVehHr(district, baselineMetrics), proposed: totalDelayVehHr(district, currentMetrics), higherIsBetter: false, decimals: 0 },
+    { label: 'Throughput', unit: 'veh/hr', baseline: throughputVehHr(district, baselineMetrics), proposed: throughputVehHr(district, currentMetrics), higherIsBetter: true, decimals: 0 },
     { label: 'CO2 Emissions', unit: 't (idx)', baseline: co2(base.congestion, false, 0), proposed: co2(cur.congestion, hasBusLane, parkCount), higherIsBetter: false, decimals: 2 },
     { label: 'Fuel Consumption', unit: 'L (idx)', baseline: fuel(base.congestion, false, 0), proposed: fuel(cur.congestion, hasBusLane, parkCount), higherIsBetter: false, decimals: 0 },
     { label: 'Safety Index', unit: '/100', baseline: safetyIndex(base.congestion, false, false), proposed: safetyIndex(cur.congestion, hasRoundabout, hasLightsRemoved), higherIsBetter: true, decimals: 0 },

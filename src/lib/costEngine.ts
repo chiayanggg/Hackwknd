@@ -88,6 +88,26 @@ export function computeCostAndTime(district: DistrictData, edits: CityEdits) {
   return { costRM, constructionMonths, counts };
 }
 
+/** Real OSM roads get chopped into many short way fragments (speed-limit changes, bridge
+ * boundaries, lane-count changes...). Summing a per-edge metric like flow or throughput
+ * across every fragment counts the same physical traffic several times over — a road cut
+ * into 6 pieces isn't carrying 6x the cars. This collapses fragments back to one number
+ * per distinct named road (max across its fragments, since they're the same corridor)
+ * before summing across genuinely different roads. */
+export function distinctRoadTotal(district: DistrictData, metrics: Map<string, EdgeMetrics>, pick: (m: EdgeMetrics) => number): number {
+  const byName = new Map<string, number>();
+  for (const road of district.roads) {
+    const m = metrics.get(road.id);
+    if (!m) continue;
+    const value = pick(m);
+    const key = road.name || road.id;
+    byName.set(key, Math.max(byName.get(key) ?? 0, value));
+  }
+  let total = 0;
+  for (const v of byName.values()) total += v;
+  return total;
+}
+
 function averageCongestion(metrics: Map<string, EdgeMetrics>): number {
   if (metrics.size === 0) return 0;
   let sum = 0;
