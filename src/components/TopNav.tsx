@@ -12,6 +12,8 @@ interface Props {
   onTabChange: (tab: NavTab) => void;
   mode: Mode;
   onModeChange: (mode: Mode) => void;
+  accessibilityEnabled: boolean;
+  onAccessibilityToggle: () => void;
 }
 
 const TABS: { id: NavTab; label: string }[] = [
@@ -21,7 +23,7 @@ const TABS: { id: NavTab; label: string }[] = [
   { id: 'reports', label: 'Reports' },
 ];
 
-export default function TopNav({ districtName, hour, tab, onTabChange, mode, onModeChange }: Props) {
+export default function TopNav({ districtName, hour, tab, onTabChange, mode, onModeChange, accessibilityEnabled, onAccessibilityToggle }: Props) {
   return (
     <div className="flex items-center gap-4 rounded-2xl border border-white/10 bg-slate-950/80 backdrop-blur-md px-4 py-2.5 shadow-2xl">
       <div className="flex items-center gap-2">
@@ -49,6 +51,16 @@ export default function TopNav({ districtName, hour, tab, onTabChange, mode, onM
       </nav>
 
       <div className="ml-auto flex items-center gap-3">
+        <button
+          id="accessibility-toggle"
+          type="button"
+          aria-pressed={accessibilityEnabled}
+          aria-label={`${accessibilityEnabled ? 'Hide' : 'Show'} accessibility overlay`}
+          onClick={onAccessibilityToggle}
+          className={`rounded-lg border px-2.5 py-1.5 text-xs font-semibold transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-cyan-300 ${accessibilityEnabled ? 'border-cyan-300/50 bg-cyan-400/20 text-cyan-200' : 'border-white/15 bg-white/5 text-slate-300 hover:bg-white/10'}`}
+        >
+          Accessibility
+        </button>
         <span className="flex items-center gap-1.5 text-xs text-slate-400 tabular-nums">
           <IconClock className="w-3.5 h-3.5" />
           {formatHour(hour)}

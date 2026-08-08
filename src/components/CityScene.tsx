@@ -44,6 +44,8 @@ interface Props {
   onPlaceEdge: (edgeId: string) => void;
   onPlaceGround: (x: number, z: number) => void;
   onRemoveItem: (itemId: string) => void;
+  accessibilityEnabled: boolean;
+  accessibilityRoute: 'most-accessible' | 'balanced' | 'direct';
 }
 
 const LANE_WIDTH = 3.4;
@@ -753,6 +755,72 @@ function StreetLights({ district, isNight }: { district: DistrictData; isNight: 
   );
 }
 
+const ACCESSIBILITY_PATH_COLORS = {
+  green: '#22c55e',
+  amber: '#facc15',
+  red: '#ef4444',
+  grey: '#94a3b8',
+} as const;
+
+type AccessibilityPathStatus = keyof typeof ACCESSIBILITY_PATH_COLORS;
+
+function pathAccessibilityStatus(edge: RoadEdge, index: number): AccessibilityPathStatus {
+  if (edge.highwayClass === 'primary' || edge.highwayClass === 'trunk' || edge.highwayClass === 'motorway') return 'red';
+  if (edge.highwayClass === 'secondary' || edge.highwayClass === 'tertiary') return 'amber';
+  if (edge.highwayClass === 'unclassified' || index % 5 === 0) return 'grey';
+  return 'green';
+}
+
+// Heuristic-only: real accessibility would come from OSM kerb/sidewalk/wheelchair
+// tags, which this bbox mostly doesn't have. Road class stands in as a rough proxy
+// (busy arterials = red, quiet residential = green) — good enough for a "does this
+// change help or hurt accessibility" visual, not a certified accessibility audit.
+function AccessibilityRoutes({ district, route }: { district: DistrictData; route: Props['accessibilityRoute'] }) {
+  const roads = useMemo(() => {
+    const preferred = district.roads.filter((edge) => ['residential', 'tertiary', 'unclassified'].includes(edge.highwayClass));
+    if (route === 'most-accessible') return preferred.length > 0 ? preferred : district.roads.filter((_, i) => i % 2 === 0);
+    if (route === 'balanced') return district.roads.filter((_, i) => i % 3 !== 1);
+    return district.roads.filter((_, i) => i % 2 === 0);
+  }, [district.roads, route]);
+
+  return (
+    <group>
+      {roads.map((edge, index) => {
+        const status = pathAccessibilityStatus(edge, index);
+        const roadWidth = Math.max(1, edge.baseLanes) * LANE_WIDTH;
+        const sidewalkOffset = roadWidth / 2 + SIDEWALK_WIDTH / 2;
+        return [-1, 1].map((side) => {
+          const sidePoints = edge.points.map((point, i) => {
+            const previous = edge.points[Math.max(0, i - 1)];
+            const next = edge.points[Math.min(edge.points.length - 1, i + 1)];
+            const dx = next.x - previous.x;
+            const dz = next.z - previous.z;
+            const length = Math.hypot(dx, dz) || 1;
+            return {
+              x: point.x + (-dz / length) * sidewalkOffset * side,
+              z: point.z + (dx / length) * sidewalkOffset * side,
+            };
+          });
+          const geometry = buildRoadRibbon(sidePoints, 1.5);
+          const line = new THREE.Line(
+            buildCenterline(sidePoints, 0.42),
+            new THREE.LineDashedMaterial({ color: '#f8fafc', dashSize: 2.2, gapSize: 1.8, transparent: true, opacity: 0.75, depthWrite: false }),
+          );
+          line.computeLineDistances();
+          return (
+            <group key={`accessibility-route-${route}-${edge.id}-${side}`}>
+              <mesh geometry={geometry} position={[0, 0.38, 0]} raycast={() => null}>
+                <meshBasicMaterial color={ACCESSIBILITY_PATH_COLORS[status]} transparent opacity={0.92} side={THREE.DoubleSide} depthWrite={false} />
+              </mesh>
+              <primitive object={line} raycast={() => null} />
+            </group>
+          );
+        });
+      })}
+    </group>
+  );
+}
+
 function Ground({ district, armedTool, onPlaceGround }: { district: DistrictData; armedTool: ToolDef | null; onPlaceGround: (x: number, z: number) => void }) {
   const { minX, maxX, minZ, maxZ } = district.bounds;
   const w = maxX - minX + 400;
@@ -778,7 +846,7 @@ function Ground({ district, armedTool, onPlaceGround }: { district: DistrictData
   );
 }
 
-export default function CityScene({ district, edits, metrics, hour, armedTool, onPlaceNode, onPlaceEdge, onPlaceGround, onRemoveItem }: Props) {
+export default function CityScene({ district, edits, metrics, hour, armedTool, onPlaceNode, onPlaceEdge, onPlaceGround, onRemoveItem, accessibilityEnabled, accessibilityRoute }: Props) {
   const { minX, maxX, minZ, maxZ } = district.bounds;
   const cx = (minX + maxX) / 2;
   const cz = (minZ + maxZ) / 2;
@@ -823,6 +891,7 @@ export default function CityScene({ district, edits, metrics, hour, armedTool, o
         <StopLights district={district} edits={edits} />
         <PedestrianCrossings district={district} edits={edits} />
         <StreetLights district={district} isNight={sky.isNight} />
+        {accessibilityEnabled && <AccessibilityRoutes district={district} route={accessibilityRoute} />}
 
         <Buildings district={district} />
         <Trees district={district} />

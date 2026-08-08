@@ -20,6 +20,7 @@ import MiniMap from './components/MiniMap';
 import KpiCards from './components/KpiCards';
 import BeforeAfter from './components/BeforeAfter';
 import { IconClose } from './components/icons';
+import AccessibilityRoutesPanel, { type AccessibilityRoute } from './components/AccessibilityRoutesPanel';
 
 export default function App() {
   const [district, setDistrict] = useState<DistrictData | null>(null);
@@ -32,6 +33,8 @@ export default function App() {
   const [armedTool, setArmedTool] = useState<ToolDef | null>(null);
   const [tab, setTab] = useState<NavTab>('map');
   const [mobileDrawer, setMobileDrawer] = useState<'tools' | 'stats' | null>(null);
+  const [accessibilityEnabled, setAccessibilityEnabled] = useState(false);
+  const [accessibilityRoute, setAccessibilityRoute] = useState<AccessibilityRoute>('most-accessible');
 
   useEffect(() => {
     loadDistrict()
@@ -140,11 +143,22 @@ export default function App() {
         onPlaceEdge={handlePlaceEdge}
         onPlaceGround={handlePlaceGround}
         onRemoveItem={handleRemoveItem}
+        accessibilityEnabled={accessibilityEnabled}
+        accessibilityRoute={accessibilityRoute}
       />
 
       <div className="pointer-events-none absolute inset-0 z-20 flex flex-col p-3 sm:p-4 gap-3">
         <div className="pointer-events-auto">
-          <TopNav districtName={district.originName} hour={hour} tab={tab} onTabChange={setTab} mode={mode} onModeChange={setMode} />
+          <TopNav
+            districtName={district.originName}
+            hour={hour}
+            tab={tab}
+            onTabChange={setTab}
+            mode={mode}
+            onModeChange={setMode}
+            accessibilityEnabled={accessibilityEnabled}
+            onAccessibilityToggle={() => setAccessibilityEnabled((enabled) => !enabled)}
+          />
         </div>
 
         {tab === 'map' && (
@@ -163,6 +177,12 @@ export default function App() {
               <div className={`flex-col gap-3 ${mobileDrawer === 'tools' ? 'flex' : 'hidden'} sm:flex pointer-events-auto`}>
                 <ScenarioComparisonPanel rows={scenarioRows} score={overallScore.score} deltaPts={overallScore.deltaPts} />
                 <TrafficLegendPanel />
+                <AccessibilityRoutesPanel
+                  enabled={accessibilityEnabled}
+                  onToggle={() => setAccessibilityEnabled((enabled) => !enabled)}
+                  route={accessibilityRoute}
+                  setRoute={setAccessibilityRoute}
+                />
               </div>
 
               <div className={`flex-col gap-3 items-end ml-auto ${mobileDrawer === 'stats' ? 'flex' : 'hidden'} sm:flex pointer-events-auto`}>
