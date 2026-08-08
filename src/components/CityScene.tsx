@@ -49,8 +49,9 @@ interface Props {
   accessibilityRoute: 'most-accessible' | 'balanced' | 'direct';
 }
 
-const LANE_WIDTH = 3.4;
-const SIDEWALK_WIDTH = 2.4; // each side
+const LANE_WIDTH = 3.0;
+const SIDEWALK_WIDTH = 1.6; // each side — kept narrow so parallel roads (e.g. the two
+// carriageways of a divided road) don't visually overlap through their sidewalk halos
 const ITEM_COLORS: Record<string, string> = {
   apartments: '#818cf8',
   park: '#22c55e',
@@ -69,7 +70,11 @@ function Road({ edge, edits, metric, armedTool, onPlace }: { edge: RoadEdge; edi
   const edit = edits.edgeEdits[edge.id];
   const lanes = Math.max(1, edge.baseLanes + (edit?.widenCount ?? 0));
   const width = lanes * LANE_WIDTH;
-  const sidewalkSpan = width + SIDEWALK_WIDTH * 2;
+  // A one-way edge is usually one carriageway of a divided road — it doesn't need a
+  // full sidewalk allocation on both sides (the median-facing side barely has one in
+  // reality), so give it a smaller halo than a normal two-way street.
+  const sidewalkWidth = edge.oneway ? SIDEWALK_WIDTH * 0.5 : SIDEWALK_WIDTH;
+  const sidewalkSpan = width + sidewalkWidth * 2;
   const geometry = useMemo(() => buildRoadRibbon(edge.points, width), [edge.points, width]);
   const sidewalkGeometry = useMemo(() => buildRoadRibbon(edge.points, sidewalkSpan), [edge.points, sidewalkSpan]);
   const color = congestionColor(metric?.congestion ?? 0);
@@ -89,15 +94,22 @@ function Road({ edge, edits, metric, armedTool, onPlace }: { edge: RoadEdge; edi
     return [new THREE.Line(left, mat), new THREE.Line(right, mat.clone())];
   }, [edge.points, width]);
 
+  // A tiny, per-edge, deterministic height offset. Two roads that geometrically overlap
+  // (e.g. the two carriageways of a divided road running close together) would otherwise
+  // sit at the exact same Y and z-fight — flicker as the renderer can't decide which
+  // coplanar surface is "on top". This is way below what's visible from normal camera
+  // distance but enough to give the depth buffer a real answer.
+  const yJitter = hash(edge.wayId * 7.13) * 0.006;
+
   return (
     <group>
       {/* sidewalk — a wider, lighter ribbon under the asphalt; only its outer margin ends up visible */}
-      <mesh geometry={sidewalkGeometry} position={[0, -0.01, 0]}>
+      <mesh geometry={sidewalkGeometry} position={[0, -0.01 + yJitter, 0]}>
         <meshStandardMaterial color="#8a8580" roughness={1} side={THREE.DoubleSide} />
       </mesh>
       <mesh
         geometry={geometry}
-        position={[0, 0, 0]}
+        position={[0, yJitter, 0]}
         onClick={(e: ThreeEvent<MouseEvent>) => {
           if (armedTool?.target === 'edge') {
             e.stopPropagation();
@@ -108,7 +120,7 @@ function Road({ edge, edits, metric, armedTool, onPlace }: { edge: RoadEdge; edi
         <meshStandardMaterial color="#3a3733" roughness={0.9} side={THREE.DoubleSide} />
       </mesh>
       {curbs.map((line, i) => <primitive key={i} object={line} />)}
-      <mesh geometry={geometry} position={[0, 0.08, 0]}>
+      <mesh geometry={geometry} position={[0, 0.08 + yJitter, 0]}>
         <meshBasicMaterial color={color} transparent opacity={0.32} side={THREE.DoubleSide} depthWrite={false} />
       </mesh>
       {lanes >= 2 && <primitive object={centerline} />}
