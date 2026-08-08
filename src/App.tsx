@@ -134,6 +134,7 @@ export default function App() {
         district={district}
         edits={edits}
         metrics={metricsAtHour}
+        hour={hour}
         armedTool={armedTool}
         onPlaceNode={handlePlaceNode}
         onPlaceEdge={handlePlaceEdge}

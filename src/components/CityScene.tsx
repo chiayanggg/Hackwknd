@@ -18,6 +18,7 @@ import {
 } from '../lib/models';
 import { buildAdjacency, computeApproachGroups, junctionControlsThisApproach, STOP_LINE_DISTANCE_M, type ApproachGroups } from '../lib/traffic';
 import { congestionColor } from '../lib/ruleEngine';
+import { computeSkyState } from '../lib/daynight';
 import { IconWarning } from './icons';
 
 function clamp(v: number, min: number, max: number): number {
@@ -28,6 +29,7 @@ interface Props {
   district: DistrictData;
   edits: CityEdits;
   metrics: Map<string, EdgeMetrics>;
+  hour: number;
   armedTool: ToolDef | null;
   onPlaceNode: (nodeId: number) => void;
   onPlaceEdge: (edgeId: string) => void;
@@ -114,6 +116,8 @@ function Road({ edge, edits, metric, armedTool, onPlace }: { edge: RoadEdge; edi
 
 function JunctionNode({ node, edits, armedTool, onPlace }: { node: RoadNode; edits: CityEdits; armedTool: ToolDef | null; onPlace: (id: number) => void }) {
   const trafficLightGltf = useGLTF(MODEL_URLS.trafficLight);
+  const bushGltf = useGLTF(MODEL_URLS.parkBush);
+  const hedgeGltf = useGLTF(MODEL_URLS.parkHedgeCorner);
   const edit = edits.nodeEdits[node.id];
   const acceptable = armedTool?.target === 'node';
   const radius = 6 + Math.min(4, node.degree);
@@ -126,16 +130,38 @@ function JunctionNode({ node, edits, armedTool, onPlace }: { node: RoadNode; edi
   };
 
   if (edit?.roundabout) {
+    const bushSpots = [0, 1, 2, 3].map((i) => (i / 4) * Math.PI * 2 + 0.4);
     return (
       <group position={[node.pos.x, 0.08, node.pos.z]}>
+        {/* curb: pale ring just outside the circulating lane */}
         <mesh rotation={[-Math.PI / 2, 0, 0]} onClick={handleClick}>
-          <ringGeometry args={[radius * 0.55, radius, 32]} />
-          <meshStandardMaterial color="#57534e" />
+          <ringGeometry args={[radius * 0.98, radius * 1.08, 40]} />
+          <meshStandardMaterial color="#a8a29e" />
         </mesh>
-        <mesh position={[0, 0.02, 0]} rotation={[-Math.PI / 2, 0, 0]}>
-          <circleGeometry args={[radius * 0.5, 24]} />
+        {/* circulating lane */}
+        <mesh rotation={[-Math.PI / 2, 0, 0]} onClick={handleClick}>
+          <ringGeometry args={[radius * 0.55, radius * 0.98, 40]} />
+          <meshStandardMaterial color="#3a3733" />
+        </mesh>
+        {/* faint yield markings just inside the outer curb */}
+        <mesh position={[0, 0.01, 0]} rotation={[-Math.PI / 2, 0, 0]}>
+          <ringGeometry args={[radius * 0.92, radius * 0.96, 40]} />
+          <meshBasicMaterial color="#f8fafc" transparent opacity={0.35} depthWrite={false} />
+        </mesh>
+        {/* central island — curb + landscaped green */}
+        <mesh position={[0, 0.015, 0]} rotation={[-Math.PI / 2, 0, 0]}>
+          <circleGeometry args={[radius * 0.55, 28]} />
+          <meshStandardMaterial color="#8a8580" />
+        </mesh>
+        <mesh position={[0, 0.03, 0]} rotation={[-Math.PI / 2, 0, 0]}>
+          <circleGeometry args={[radius * 0.48, 24]} />
           <meshStandardMaterial color="#3f6212" />
         </mesh>
+        {bushSpots.map((a, i) => (
+          <group key={i} position={[Math.cos(a) * radius * 0.3, 0, Math.sin(a) * radius * 0.3]} rotation={[0, a, 0]}>
+            <Clone object={(i % 2 === 0 ? bushGltf : hedgeGltf).scene} scale={MODEL_SCALE.parkBush} />
+          </group>
+        ))}
       </group>
     );
   }
@@ -160,6 +186,40 @@ function JunctionNode({ node, edits, armedTool, onPlace }: { node: RoadNode; edi
   );
 }
 
+interface BuildingSlot {
+  id: string;
+  x: number;
+  z: number;
+  footprintDiameter: number;
+  levels: number;
+}
+
+// Real OSM footprints are usually sparse for a single-intersection bbox (that's the
+// scope we want — one street, not a whole district). Fill the remaining open ground
+// with procedurally-placed buildings so the street doesn't read as empty, using the
+// same nearest-road-facing rule as the real ones so it still looks intentional rather
+// than scattered. Filler never overlaps a road, a real building, or another filler.
+function buildFillerSlots(district: DistrictData, realSlots: BuildingSlot[]): BuildingSlot[] {
+  const { minX, maxX, minZ, maxZ } = district.bounds;
+  const filler: BuildingSlot[] = [];
+  const attempts = 140;
+  const target = 26;
+
+  for (let i = 0; i < attempts && filler.length < target; i++) {
+    const x = minX + hash(i * 12.9 + 3) * (maxX - minX);
+    const z = minZ + hash(i * 5.7 + 9) * (maxZ - minZ);
+    const footprintDiameter = 7 + hash(i * 8.3 + 1) * 7;
+    const margin = footprintDiameter / 2 + 3;
+
+    const tooCloseToRoad = district.roads.some((edge) => edge.points.some((p) => Math.hypot(p.x - x, p.z - z) < margin + 4));
+    const tooCloseToExisting = [...realSlots, ...filler].some((s) => Math.hypot(s.x - x, s.z - z) < (s.footprintDiameter + footprintDiameter) / 2 + 4);
+    if (tooCloseToRoad || tooCloseToExisting) continue;
+
+    filler.push({ id: `filler-${i}`, x, z, footprintDiameter, levels: 2 + Math.floor(hash(i * 4.1 + 2) * 7) });
+  }
+  return filler;
+}
+
 function Buildings({ district }: { district: DistrictData }) {
   // Fixed set of 8 city-building variants — safe to call useGLTF unconditionally per key.
   const gltfs: Partial<Record<(typeof CITY_BUILDING_KEYS)[number], ReturnType<typeof useGLTF>>> = {};
@@ -172,34 +232,39 @@ function Buildings({ district }: { district: DistrictData }) {
   // can face it — reads as an intentional streetscape instead of randomly-rotated boxes.
   const roadPoints = useMemo(() => district.roads.flatMap((r) => r.points), [district.roads]);
 
+  const slots = useMemo(() => {
+    const real: BuildingSlot[] = district.buildings.map((b) => {
+      const centroid = polygonCentroid(b.points);
+      let maxDist = 0;
+      for (const p of b.points) maxDist = Math.max(maxDist, Math.hypot(p.x - centroid.x, p.z - centroid.z));
+      return { id: b.id, x: centroid.x, z: centroid.z, footprintDiameter: maxDist * 2, levels: b.levels };
+    });
+    return [...real, ...buildFillerSlots(district, real)];
+  }, [district]);
+
   return (
     <group>
-      {district.buildings.map((b, i) => {
-        const centroid = polygonCentroid(b.points);
-        let maxDist = 0;
-        for (const p of b.points) maxDist = Math.max(maxDist, Math.hypot(p.x - centroid.x, p.z - centroid.z));
-        const footprintDiameter = maxDist * 2;
-
+      {slots.map((slot, i) => {
         const key = CITY_BUILDING_KEYS[Math.floor(hash(i * 3.3 + 1) * CITY_BUILDING_KEYS.length)];
         const gltf = gltfs[key];
         if (!gltf) return null;
         const baseScale = MODEL_SCALE[key] ?? 1;
-        const footprintFactor = clamp(footprintDiameter / 9, 0.6, 2.4);
-        const heightFactor = clamp((b.levels * 3.2) / 12, 0.7, 2.8);
+        const footprintFactor = clamp(slot.footprintDiameter / 9, 0.6, 2.4);
+        const heightFactor = clamp((slot.levels * 3.2) / 12, 0.7, 2.8);
 
         let nearest = roadPoints[0];
         let nearestDist = Infinity;
         for (const p of roadPoints) {
-          const d = Math.hypot(p.x - centroid.x, p.z - centroid.z);
+          const d = Math.hypot(p.x - slot.x, p.z - slot.z);
           if (d < nearestDist) {
             nearestDist = d;
             nearest = p;
           }
         }
-        const rot = nearest ? Math.atan2(nearest.x - centroid.x, nearest.z - centroid.z) : 0;
+        const rot = nearest ? Math.atan2(nearest.x - slot.x, nearest.z - slot.z) : 0;
 
         return (
-          <group key={b.id} position={[centroid.x, 0, centroid.z]} rotation={[0, rot, 0]}>
+          <group key={slot.id} position={[slot.x, 0, slot.z]} rotation={[0, rot, 0]}>
             <Clone object={gltf.scene} scale={[baseScale * footprintFactor, baseScale * heightFactor, baseScale * footprintFactor]} castShadow receiveShadow />
           </group>
         );
@@ -462,15 +527,13 @@ function Trees({ district }: { district: DistrictData }) {
 
   const trees = useMemo(() => {
     const { minX, maxX, minZ, maxZ } = district.bounds;
-    const buildingCentroids = district.buildings.map((b) => {
-      let x = 0;
-      let z = 0;
-      b.points.forEach((p) => {
-        x += p.x;
-        z += p.z;
-      });
-      return { x: x / b.points.length, z: z / b.points.length };
+    const realSlots: BuildingSlot[] = district.buildings.map((b) => {
+      const centroid = polygonCentroid(b.points);
+      let maxDist = 0;
+      for (const p of b.points) maxDist = Math.max(maxDist, Math.hypot(p.x - centroid.x, p.z - centroid.z));
+      return { id: b.id, x: centroid.x, z: centroid.z, footprintDiameter: maxDist * 2, levels: b.levels };
     });
+    const allBuildingSlots = [...realSlots, ...buildFillerSlots(district, realSlots)];
 
     const list: { x: number; z: number; key: (typeof TREE_MODEL_KEYS)[number]; rot: number }[] = [];
     const attempts = 220;
@@ -478,7 +541,7 @@ function Trees({ district }: { district: DistrictData }) {
       const x = minX + hash(i * 3.1) * (maxX - minX);
       const z = minZ + hash(i * 7.7 + 1) * (maxZ - minZ);
       const tooCloseToRoad = district.roads.some((edge) => edge.points.some((p) => Math.hypot(p.x - x, p.z - z) < 10));
-      const tooCloseToBuilding = buildingCentroids.some((c) => Math.hypot(c.x - x, c.z - z) < 12);
+      const tooCloseToBuilding = allBuildingSlots.some((s) => Math.hypot(s.x - x, s.z - z) < s.footprintDiameter / 2 + 5);
       if (tooCloseToRoad || tooCloseToBuilding) continue;
       list.push({ x, z, key: TREE_MODEL_KEYS[Math.floor(hash(i * 2.3) * TREE_MODEL_KEYS.length)], rot: hash(i * 5.9) * Math.PI * 2 });
     }
@@ -588,6 +651,43 @@ function PedestrianCrossings({ district, edits }: { district: DistrictData; edit
   );
 }
 
+function StreetLights({ district, isNight }: { district: DistrictData; isNight: number }) {
+  const gltf = useGLTF(MODEL_URLS.streetLight);
+
+  // One lamp near each junction corner (reuses the same corner spot the traffic-light
+  // pair sits at, offset further out) — modest, deterministic placement rather than
+  // scattering along every meter of sidewalk.
+  const spots = useMemo(() => {
+    const list: { x: number; z: number; radius: number }[] = [];
+    for (const node of district.nodes.values()) {
+      if (!node.isJunction) continue;
+      const radius = 6 + Math.min(4, node.degree);
+      list.push({ x: node.pos.x + radius * 1.7, z: node.pos.z - radius * 0.4, radius });
+      list.push({ x: node.pos.x - radius * 0.4, z: node.pos.z + radius * 1.7, radius });
+    }
+    return list;
+  }, [district]);
+
+  const lightRefs = useRef<(THREE.PointLight | null)[]>([]);
+  useFrame(() => {
+    const intensity = isNight > 0.4 ? (isNight - 0.4) * 20 : 0;
+    lightRefs.current.forEach((l) => {
+      if (l) l.intensity = intensity;
+    });
+  });
+
+  return (
+    <group>
+      {spots.map((s, i) => (
+        <group key={i} position={[s.x, 0, s.z]}>
+          <Clone object={gltf.scene} scale={MODEL_SCALE.streetLight} />
+          <pointLight ref={(el) => { lightRefs.current[i] = el; }} position={[0, 6, 0]} color="#ffd9a0" intensity={0} distance={22} decay={2} />
+        </group>
+      ))}
+    </group>
+  );
+}
+
 function Ground({ district, armedTool, onPlaceGround }: { district: DistrictData; armedTool: ToolDef | null; onPlaceGround: (x: number, z: number) => void }) {
   const { minX, maxX, minZ, maxZ } = district.bounds;
   const w = maxX - minX + 400;
@@ -613,13 +713,18 @@ function Ground({ district, armedTool, onPlaceGround }: { district: DistrictData
   );
 }
 
-export default function CityScene({ district, edits, metrics, armedTool, onPlaceNode, onPlaceEdge, onPlaceGround, onRemoveItem }: Props) {
+export default function CityScene({ district, edits, metrics, hour, armedTool, onPlaceNode, onPlaceEdge, onPlaceGround, onRemoveItem }: Props) {
   const { minX, maxX, minZ, maxZ } = district.bounds;
   const cx = (minX + maxX) / 2;
   const cz = (minZ + maxZ) / 2;
   const size = Math.max(maxX - minX, maxZ - minZ, 200);
 
   const junctionNodes = useMemo(() => Array.from(district.nodes.values()).filter((n) => n.isJunction), [district.nodes]);
+
+  const sky = computeSkyState(hour);
+  const sunHeight = size * (0.4 + 1.3 * sky.sunElevation01);
+  const sunX = cx + size * (sky.sunAzimuth01 * 2 - 1);
+  const sunZ = cz + size * 0.4;
 
   return (
     <div className="absolute inset-0" style={{ cursor: armedTool ? 'crosshair' : 'grab' }}>
@@ -629,10 +734,17 @@ export default function CityScene({ district, edits, metrics, armedTool, onPlace
         gl={{ logarithmicDepthBuffer: true }}
         camera={{ position: [cx + size * 0.7, size * 0.9, cz + size * 0.9], fov: 45, near: 2, far: size * 6 }}
       >
-        <color attach="background" args={['#bcd9f0']} />
-        <fog attach="fog" args={['#bcd9f0', size * 1.5, size * 5]} />
-        <ambientLight intensity={0.65} />
-        <directionalLight position={[cx + size, size * 1.2, cz + size * 0.5]} intensity={1.15} castShadow shadow-mapSize={[1024, 1024]} />
+        <color attach="background" args={[sky.skyColor]} />
+        <fog attach="fog" args={[sky.fogColor, size * (1.5 - 0.5 * sky.isNight), size * 5]} />
+        <ambientLight intensity={sky.ambientIntensity} color={sky.isNight > 0.5 ? '#8ea2d8' : '#ffffff'} />
+        <directionalLight
+          position={[sunX, sunHeight, sunZ]}
+          intensity={sky.sunIntensity}
+          color={sky.sunColor}
+          castShadow
+          shadow-mapSize={[1024, 1024]}
+        />
+        <hemisphereLight args={[sky.skyColor, '#1a2e05', 0.25 + 0.15 * (1 - sky.isNight)]} />
 
         <Ground district={district} armedTool={armedTool} onPlaceGround={onPlaceGround} />
 
@@ -645,6 +757,7 @@ export default function CityScene({ district, edits, metrics, armedTool, onPlace
         ))}
         <StopLights district={district} edits={edits} />
         <PedestrianCrossings district={district} edits={edits} />
+        <StreetLights district={district} isNight={sky.isNight} />
 
         <Buildings district={district} />
         <Trees district={district} />
@@ -675,3 +788,6 @@ useGLTF.preload(MODEL_URLS.tree2);
 useGLTF.preload(MODEL_URLS.tree3);
 for (const key of CITY_BUILDING_KEYS) useGLTF.preload(MODEL_URLS[key]);
 useGLTF.preload(MODEL_URLS.chargingStation);
+useGLTF.preload(MODEL_URLS.streetLight);
+useGLTF.preload(MODEL_URLS.parkBush);
+useGLTF.preload(MODEL_URLS.parkHedgeCorner);

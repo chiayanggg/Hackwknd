@@ -4,7 +4,7 @@ import type { GeoOrigin } from './geo';
 
 // Real intersection: Jalan Tun Razak / Jalan Ampang area, Kuala Lumpur.
 export const KL_ORIGIN: GeoOrigin = { lat: 3.1614, lon: 101.7203 };
-const BBOX_DELTA = 0.0009; // ~190m square — one intersection and its immediate approaches, not a whole district
+const BBOX_DELTA = 0.0013; // ~290m square — one street corridor with a few real cross-streets and junctions, not a whole district
 
 const HIGHWAY_CLASSES =
   '^(motorway|trunk|primary|secondary|tertiary|residential|unclassified|motorway_link|trunk_link|primary_link|secondary_link|tertiary_link)$';
