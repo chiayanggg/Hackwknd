@@ -11,7 +11,7 @@ interface Props {
 }
 
 const SPEEDS = [1, 2, 4];
-const HOURS_PER_SEC_AT_1X = 0.5; // one sim-hour every 2 real seconds at 1x
+const HOURS_PER_SEC_AT_1X = 0.15; // one sim-hour every ~6.7 real seconds at 1x — full day in ~2.7 min
 
 export default function TimeControls({ hour, onChange, playing, onTogglePlay, speed, onSpeedChange }: Props) {
   const raf = useRef<number | null>(null);
