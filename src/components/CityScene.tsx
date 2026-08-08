@@ -416,11 +416,15 @@ function Cars({ district, edits, metrics }: { district: DistrictData; edits: Cit
           const next = options[Math.floor(hash(elapsed * 97 + i * 53) * options.length)];
           car.edge = next;
           car.forward = next.nodeIds[0] === arrivedAt;
-          car.t = car.forward ? 0 : 1;
+          // Nudge just off the boundary (not exactly 0/1) — otherwise a car that's
+          // immediately blocked on the new edge re-triggers this arrival branch next
+          // frame and re-routes again before ever actually driving the segment,
+          // which looks like cars skipping/teleporting through junctions.
+          car.t = car.forward ? 0.01 : 0.99;
         } else {
-          // dead end — turn around in place
+          // dead end — turn around in place, same nudge
           car.forward = !car.forward;
-          car.t = Math.max(0, Math.min(1, car.t));
+          car.t = car.forward ? 0.01 : 0.99;
         }
       }
 

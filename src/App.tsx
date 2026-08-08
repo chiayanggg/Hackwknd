@@ -1,28 +1,37 @@
 import { useEffect, useMemo, useState } from 'react';
 import { loadDistrict } from './lib/osm';
-import { computeMetricsForAllPeriods, computeDerivedMetrics, aggregateMetrics } from './lib/costEngine';
+import { computeMetricsAtHour, computeDerivedMetrics, computeDailyFlowSeries, aggregateMetrics } from './lib/costEngine';
+import { computeScenarioRows, computeOverallScore } from './lib/scenario';
 import { generateAnalysis } from './lib/mockAI';
-import { IconClose } from './components/icons';
-import type { BuildingToolId, CityEdits, DistrictData, Mode, TimePeriod } from './types';
+import type { BuildingToolId, CityEdits, DistrictData, Mode } from './types';
 import { emptyEdits } from './types';
 import type { ToolDef } from './data/tools';
-import ModeToggle from './components/ModeToggle';
-import TimeOfDaySelector from './components/TimeOfDaySelector';
-import Toolbox from './components/Toolbox';
+import type { NavTab } from './components/TopNav';
+import TopNav from './components/TopNav';
 import CityScene from './components/CityScene';
-import HudBar from './components/HudBar';
+import InterventionToolsList from './components/InterventionToolsList';
+import ScenarioComparisonPanel from './components/ScenarioComparisonPanel';
+import TrafficLegendPanel from './components/TrafficLegendPanel';
+import RecommendationPanel from './components/RecommendationPanel';
+import TrafficFlowChart from './components/TrafficFlowChart';
+import TimeControls from './components/TimeControls';
+import SummaryMetricsStrip from './components/SummaryMetricsStrip';
+import MiniMap from './components/MiniMap';
 import KpiCards from './components/KpiCards';
 import BeforeAfter from './components/BeforeAfter';
-import RecommendationPanel from './components/RecommendationPanel';
+import { IconClose } from './components/icons';
 
 export default function App() {
   const [district, setDistrict] = useState<DistrictData | null>(null);
   const [loadError, setLoadError] = useState<string | null>(null);
   const [edits, setEdits] = useState<CityEdits>(emptyEdits());
   const [mode, setMode] = useState<Mode>('professional');
-  const [period, setPeriod] = useState<TimePeriod>('mid');
+  const [hour, setHour] = useState(13);
+  const [playing, setPlaying] = useState(true);
+  const [speed, setSpeed] = useState(1);
   const [armedTool, setArmedTool] = useState<ToolDef | null>(null);
-  const [reportOpen, setReportOpen] = useState(false);
+  const [tab, setTab] = useState<NavTab>('map');
+  const [mobileDrawer, setMobileDrawer] = useState<'tools' | 'stats' | null>(null);
 
   useEffect(() => {
     loadDistrict()
@@ -30,13 +39,22 @@ export default function App() {
       .catch((err) => setLoadError(String(err)));
   }, []);
 
-  const baselineMetricsByPeriod = useMemo(() => (district ? computeMetricsForAllPeriods(district, emptyEdits()) : null), [district]);
-  const metricsByPeriod = useMemo(() => (district ? computeMetricsForAllPeriods(district, edits) : null), [district, edits]);
+  const metricsAtHour = useMemo(() => (district ? computeMetricsAtHour(district, edits, hour) : null), [district, edits, hour]);
+  const baselineMetricsAtHour = useMemo(() => (district ? computeMetricsAtHour(district, emptyEdits(), hour) : null), [district, hour]);
 
   const derived = useMemo(() => {
-    if (!district || !metricsByPeriod || !baselineMetricsByPeriod) return null;
-    return computeDerivedMetrics(district, edits, metricsByPeriod, baselineMetricsByPeriod, period);
-  }, [district, edits, metricsByPeriod, baselineMetricsByPeriod, period]);
+    if (!district || !metricsAtHour || !baselineMetricsAtHour) return null;
+    return computeDerivedMetrics(district, edits, metricsAtHour, baselineMetricsAtHour);
+  }, [district, edits, metricsAtHour, baselineMetricsAtHour]);
+
+  const scenarioRows = useMemo(() => {
+    if (!district || !metricsAtHour || !baselineMetricsAtHour) return null;
+    return computeScenarioRows(district, edits, metricsAtHour, baselineMetricsAtHour);
+  }, [district, edits, metricsAtHour, baselineMetricsAtHour]);
+
+  const overallScore = useMemo(() => (scenarioRows ? computeOverallScore(scenarioRows) : null), [scenarioRows]);
+
+  const flowSeries = useMemo(() => (district ? computeDailyFlowSeries(district, edits) : null), [district, edits]);
 
   const analysis = useMemo(() => (derived ? generateAnalysis(edits, derived, mode) : null), [edits, derived, mode]);
 
@@ -92,7 +110,7 @@ export default function App() {
     );
   }
 
-  if (!district || !metricsByPeriod || !baselineMetricsByPeriod || !derived || !analysis) {
+  if (!district || !metricsAtHour || !baselineMetricsAtHour || !derived || !analysis || !scenarioRows || !overallScore || !flowSeries) {
     return (
       <div className="h-full bg-slate-950 text-slate-100 flex items-center justify-center p-6">
         <p className="text-sm text-slate-400 animate-pulse">Loading real road &amp; building data for Kuala Lumpur…</p>
@@ -100,13 +118,22 @@ export default function App() {
     );
   }
 
+  const curAgg = aggregateMetrics(metricsAtHour);
+  const baseAgg = aggregateMetrics(baselineMetricsAtHour);
+  const pctChange = (base: number, cur: number) => (base !== 0 ? ((cur - base) / Math.abs(base)) * 100 : 0);
+  const co2Row = scenarioRows.find((r) => r.label === 'CO2 Emissions')!;
+  const speedRow = scenarioRows.find((r) => r.label === 'Average Speed')!;
+  const delayRow = scenarioRows.find((r) => r.label === 'Total Delay')!;
+  const hasBusLane = Object.values(edits.edgeEdits).some((e) => e.hasBusLane);
+  const publicTransportPct = 12 + (hasBusLane ? 18 : 0);
+  const baselinePublicTransportPct = 12;
+
   return (
     <div className="relative h-full w-full bg-slate-950 text-slate-100 overflow-hidden">
-      {/* full-bleed 3D city — everything else floats on top of it */}
       <CityScene
         district={district}
         edits={edits}
-        metrics={metricsByPeriod[period]}
+        metrics={metricsAtHour}
         armedTool={armedTool}
         onPlaceNode={handlePlaceNode}
         onPlaceEdge={handlePlaceEdge}
@@ -114,74 +141,95 @@ export default function App() {
         onRemoveItem={handleRemoveItem}
       />
 
-      {/* top bar */}
-      <div className="pointer-events-none absolute top-0 left-0 right-0 z-20 flex flex-wrap items-start justify-between gap-3 p-4">
-        <div className="pointer-events-auto rounded-2xl border border-white/10 bg-slate-950/75 backdrop-blur-md px-4 py-2.5 shadow-2xl">
-          <h1 className="text-sm font-bold leading-tight">Smart City AI Planning Simulator</h1>
-          <p className="text-[10px] text-slate-400">
-            {district.originName} · {district.source === 'overpass' ? 'live OSM data' : 'offline fallback layout'} ·{' '}
-            {district.roads.length} roads, {district.buildings.length} buildings
-          </p>
-        </div>
+      <div className="pointer-events-none absolute inset-0 z-20 flex flex-col p-3 sm:p-4 gap-3">
         <div className="pointer-events-auto">
-          <TimeOfDaySelector period={period} onChange={setPeriod} metricsByPeriod={metricsByPeriod} />
+          <TopNav districtName={district.originName} hour={hour} tab={tab} onTabChange={setTab} mode={mode} onModeChange={setMode} />
         </div>
-        <div className="pointer-events-auto">
-          <ModeToggle mode={mode} onChange={setMode} />
-        </div>
-      </div>
 
-      {/* left tool dock */}
-      <div className="pointer-events-none absolute top-24 left-4 z-20">
-        <div className="pointer-events-auto">
-          <Toolbox mode={mode} armedToolId={armedTool?.id ?? null} onArm={handleArm} />
-        </div>
-      </div>
+        {tab === 'map' && (
+          <>
+            {/* mobile: compact toggle buttons for the side panels */}
+            <div className="flex sm:hidden gap-2 pointer-events-auto">
+              <button onClick={() => setMobileDrawer((d) => (d === 'tools' ? null : 'tools'))} className="rounded-xl bg-slate-950/80 border border-white/10 px-3 py-1.5 text-xs text-slate-200">
+                Tools
+              </button>
+              <button onClick={() => setMobileDrawer((d) => (d === 'stats' ? null : 'stats'))} className="rounded-xl bg-slate-950/80 border border-white/10 px-3 py-1.5 text-xs text-slate-200">
+                Stats
+              </button>
+            </div>
 
-      {/* right HUD */}
-      <div className="pointer-events-none absolute top-24 right-4 z-20">
-        <div className="pointer-events-auto">
-          <HudBar derived={derived} reportOpen={reportOpen} onToggleReport={() => setReportOpen((v) => !v)} />
-        </div>
-      </div>
+            <div className="flex-1 flex items-start justify-between gap-3 min-h-0">
+              <div className={`flex-col gap-3 ${mobileDrawer === 'tools' ? 'flex' : 'hidden'} sm:flex pointer-events-auto`}>
+                <ScenarioComparisonPanel rows={scenarioRows} score={overallScore.score} deltaPts={overallScore.deltaPts} />
+                <TrafficLegendPanel />
+              </div>
 
-      {/* bottom-left recommendation + reset */}
-      <div className="pointer-events-none absolute bottom-4 left-4 right-4 sm:right-auto z-20 flex flex-col gap-2 sm:w-[420px]">
-        <div className="pointer-events-auto">
-          <RecommendationPanel analysis={analysis} mode={mode} />
-        </div>
-        <button
-          onClick={() => setEdits(emptyEdits())}
-          className="pointer-events-auto self-start rounded-full border border-white/10 bg-slate-950/75 backdrop-blur-md px-3 py-1 text-[11px] text-slate-400 hover:text-slate-200 shadow-xl"
-        >
-          Reset city to baseline
-        </button>
-      </div>
+              <div className={`flex-col gap-3 items-end ml-auto ${mobileDrawer === 'stats' ? 'flex' : 'hidden'} sm:flex pointer-events-auto`}>
+                <InterventionToolsList mode={mode} armedToolId={armedTool?.id ?? null} onArm={handleArm} onReset={() => setEdits(emptyEdits())} />
+                <RecommendationPanel analysis={analysis} mode={mode} />
+              </div>
+            </div>
 
-      {/* full report slide-in drawer */}
-      {reportOpen && (
-        <div className="absolute top-0 right-0 z-30 h-full w-full sm:w-[420px] overflow-y-auto border-l border-white/10 bg-slate-950/95 backdrop-blur-md p-5 space-y-5">
-          <div className="flex items-center justify-between">
-            <h2 className="text-sm font-semibold text-slate-200">Full report</h2>
-            <button onClick={() => setReportOpen(false)} className="text-slate-400 hover:text-slate-200">
-              <IconClose className="w-4 h-4" />
-            </button>
+            <div className="hidden lg:flex items-end gap-3 pointer-events-auto">
+              <TrafficFlowChart data={flowSeries} currentHour={hour} />
+              <div className="flex-1 flex flex-col gap-2 max-w-md">
+                <TimeControls hour={hour} onChange={setHour} playing={playing} onTogglePlay={() => setPlaying((p) => !p)} speed={speed} onSpeedChange={setSpeed} />
+              </div>
+              <SummaryMetricsStrip
+                totalVehicles={Math.round(curAgg.effectiveFlow)}
+                totalVehiclesDeltaPct={pctChange(baseAgg.effectiveFlow, curAgg.effectiveFlow)}
+                avgSpeed={speedRow.proposed}
+                avgSpeedDeltaPct={pctChange(speedRow.baseline, speedRow.proposed)}
+                totalDelay={delayRow.proposed}
+                totalDelayDeltaPct={pctChange(delayRow.baseline, delayRow.proposed)}
+                co2={co2Row.proposed}
+                co2DeltaPct={pctChange(co2Row.baseline, co2Row.proposed)}
+                publicTransportPct={publicTransportPct}
+                publicTransportDeltaPct={pctChange(baselinePublicTransportPct, publicTransportPct)}
+              />
+              <MiniMap district={district} />
+            </div>
+            <div className="lg:hidden pointer-events-auto">
+              <TimeControls hour={hour} onChange={setHour} playing={playing} onTogglePlay={() => setPlaying((p) => !p)} speed={speed} onSpeedChange={setSpeed} />
+            </div>
+          </>
+        )}
+
+        {tab !== 'map' && (
+          <div className="pointer-events-auto flex-1 overflow-y-auto rounded-2xl border border-white/10 bg-slate-950/90 backdrop-blur-md p-5 space-y-5">
+            <div className="flex items-center justify-between">
+              <h2 className="text-sm font-semibold text-slate-200 capitalize">{tab}</h2>
+              <button onClick={() => setTab('map')} className="text-slate-400 hover:text-slate-200">
+                <IconClose className="w-4 h-4" />
+              </button>
+            </div>
+            {tab === 'dashboard' && (
+              <>
+                <ScenarioComparisonPanel rows={scenarioRows} score={overallScore.score} deltaPts={overallScore.deltaPts} />
+                <KpiCards metrics={curAgg} baselineMetrics={baseAgg} derived={derived} />
+              </>
+            )}
+            {tab === 'analysis' && (
+              <>
+                <TrafficFlowChart data={flowSeries} currentHour={hour} />
+                <BeforeAfter before={baseAgg} after={curAgg} />
+              </>
+            )}
+            {tab === 'reports' && (
+              <>
+                <RecommendationPanel analysis={analysis} mode={mode} />
+                <KpiCards metrics={curAgg} baselineMetrics={baseAgg} derived={derived} />
+                <p className="text-[11px] text-slate-500 pt-3 border-t border-white/10">
+                  Simulation results are estimates for planning and educational purposes and are not a substitute for
+                  professional traffic engineering analysis. Real road/building geometry from OpenStreetMap; cars,
+                  trees, traffic lights, buildings and park furniture are real <code>.glb</code> models; AI
+                  recommendation is a rule-based mock standing in for a live Gemini call.
+                </p>
+              </>
+            )}
           </div>
-          <KpiCards
-            metrics={aggregateMetrics(metricsByPeriod[period])}
-            baselineMetrics={aggregateMetrics(baselineMetricsByPeriod[period])}
-            derived={derived}
-          />
-          <BeforeAfter before={aggregateMetrics(baselineMetricsByPeriod[period])} after={aggregateMetrics(metricsByPeriod[period])} />
-          <p className="text-[11px] text-slate-500 pt-3 border-t border-white/10">
-            Real road/building geometry from OpenStreetMap (Overpass API), rule-engine formulas from the project doc.
-            Cars, trees and traffic lights are real <code>.glb</code> models; buildings are still procedural boxes
-            pending building assets. Traffic lights and roundabout entries actually stop cars — deterministic phase
-            cycles standing in for real signal timing/gap detection. AI recommendation is a rule-based mock standing
-            in for the Gemini <code>/api/analyze</code> call — key's ready, not wired up yet.
-          </p>
-        </div>
-      )}
+        )}
+      </div>
     </div>
   );
 }

@@ -1,4 +1,5 @@
 import type { CityEdits, DerivedMetrics, DistrictData, EdgeMetrics, TimePeriod } from '../types';
+import { PERIOD_ANCHOR_HOUR } from '../types';
 import { computeAllEdgeMetrics, computeBaseFlows, HIGH_CONGESTION_THRESHOLD } from './ruleEngine';
 
 const PARK_COST = 1_200_000;
@@ -117,24 +118,19 @@ export function aggregateMetrics(metrics: Map<string, EdgeMetrics>): AggregateMe
   return { congestion: congestion / n, speed: speed / n, waitingTimeSec: waitingTimeSec / n, effectiveFlow };
 }
 
+/** Both metric maps must be evaluated at the same simulated hour — this is a same-moment
+ * baseline-vs-proposed comparison, not a daily average, so an edit's effect is never
+ * diluted by hours where it wouldn't matter. */
 export function computeDerivedMetrics(
   district: DistrictData,
   edits: CityEdits,
-  metricsByPeriod: Record<TimePeriod, Map<string, EdgeMetrics>>,
-  baselineMetricsByPeriod: Record<TimePeriod, Map<string, EdgeMetrics>>,
-  period: TimePeriod
+  currentMetrics: Map<string, EdgeMetrics>,
+  baselineMetrics: Map<string, EdgeMetrics>
 ): DerivedMetrics {
   const { costRM, constructionMonths, counts } = computeCostAndTime(district, edits);
 
-  const currentMetrics = metricsByPeriod[period];
-  const baselineMetrics = baselineMetricsByPeriod[period];
-
-  const avgAcrossPeriods = (byPeriod: Record<TimePeriod, Map<string, EdgeMetrics>>) => {
-    const periods: TimePeriod[] = ['am', 'mid', 'pm', 'night'];
-    return periods.reduce((s, p) => s + averageCongestion(byPeriod[p]), 0) / periods.length;
-  };
-  const avgCongestion = avgAcrossPeriods(metricsByPeriod);
-  const baseAvgCongestion = avgAcrossPeriods(baselineMetricsByPeriod);
+  const avgCongestion = averageCongestion(currentMetrics);
+  const baseAvgCongestion = averageCongestion(baselineMetrics);
 
   let worstEdgeName = '—';
   let worstCongestion = 0;
@@ -181,18 +177,51 @@ export function computeDerivedMetrics(
     accidentProbChangePct: round1(accidentProbChangePct),
     populationCapacityDelta,
     travelTimeSavedMin,
-    avgCongestion: currentMetrics.size ? averageCongestion(currentMetrics) : 0,
+    avgCongestion,
     worstEdgeName,
     worstCongestion,
   };
 }
 
+/** The 4 quick-jump presets (AM/Mid/PM/Night), each pinned to its representative hour —
+ * used for preset dot colors, not the live simulation (which reads the continuous hour). */
 export function computeMetricsForAllPeriods(district: DistrictData, edits: CityEdits): Record<TimePeriod, Map<string, EdgeMetrics>> {
   const baseFlows = computeBaseFlows(district.roads);
   const periods: TimePeriod[] = ['am', 'mid', 'pm', 'night'];
   const result = {} as Record<TimePeriod, Map<string, EdgeMetrics>>;
-  for (const p of periods) result[p] = computeAllEdgeMetrics(district, edits, baseFlows, p);
+  for (const p of periods) result[p] = computeAllEdgeMetrics(district, edits, baseFlows, PERIOD_ANCHOR_HOUR[p]);
   return result;
+}
+
+export function computeMetricsAtHour(district: DistrictData, edits: CityEdits, hour: number): Map<string, EdgeMetrics> {
+  const baseFlows = computeBaseFlows(district.roads);
+  return computeAllEdgeMetrics(district, edits, baseFlows, hour);
+}
+
+export interface FlowSample {
+  hour: number;
+  baselineVehicles: number;
+  proposedVehicles: number;
+}
+
+/** Samples the real rule engine across the day (not fabricated data) — used for the
+ * traffic-flow chart. `steps` evaluations of the whole road network; fine at 24-48, only
+ * recomputed when the district loads or edits change, never per-frame. */
+export function computeDailyFlowSeries(district: DistrictData, edits: CityEdits, steps = 24): FlowSample[] {
+  const baseFlows = computeBaseFlows(district.roads);
+  const baseline = { edgeEdits: {}, nodeEdits: {}, placedItems: [] } as CityEdits;
+  const samples: FlowSample[] = [];
+  for (let i = 0; i <= steps; i++) {
+    const hour = (i / steps) * 24;
+    const baseMetrics = computeAllEdgeMetrics(district, baseline, baseFlows, hour);
+    const proposedMetrics = computeAllEdgeMetrics(district, edits, baseFlows, hour);
+    let baselineVehicles = 0;
+    let proposedVehicles = 0;
+    for (const m of baseMetrics.values()) baselineVehicles += m.effectiveFlow;
+    for (const m of proposedMetrics.values()) proposedVehicles += m.effectiveFlow;
+    samples.push({ hour, baselineVehicles: Math.round(baselineVehicles), proposedVehicles: Math.round(proposedVehicles) });
+  }
+  return samples;
 }
 
 function pctChange(base: number, current: number): number {
