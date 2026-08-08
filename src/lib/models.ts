@@ -43,6 +43,8 @@ export const MODEL_URLS = {
   parkFlowerB: '/models/park-flower-b.glb',
   parkFloorA: '/models/park-floor-a.glb',
   parkCobble: '/models/park-cobble.glb',
+
+  roundabout: '/models/roundabout.glb',
 } as const;
 
 export const CAR_MODEL_KEYS = ['suv', 'sportsCar', 'taxi', 'policeCar'] as const;
@@ -114,6 +116,9 @@ export const MODEL_SCALE: Record<string, number> = {
   parkFlowerB: 1,
   parkFloorA: 1,
   parkCobble: 1,
+
+  // Raw bbox ~20m across, no node-scale — already close to real roundabout scale.
+  roundabout: 1,
 };
 
 // If a model's forward axis doesn't match travel direction once you can see it

@@ -25,15 +25,15 @@ interface Keyframe {
 // Anchor points around a 24h clock — interpolated smoothly between neighbors so the
 // transition is gradual ("slowly bright / slowly dark"), not a hard cut.
 const KEYFRAMES: Keyframe[] = [
-  { hour: 0, sky: '#050810', fog: '#050810', ambient: 0.16, sunIntensity: 0.04, sunColor: '#37456b', isNight: 1 },
-  { hour: 5, sky: '#0a1020', fog: '#0a1020', ambient: 0.18, sunIntensity: 0.06, sunColor: '#3b4a6b', isNight: 1 },
+  { hour: 0, sky: '#0c1224', fog: '#0c1224', ambient: 0.3, sunIntensity: 0.14, sunColor: '#5a6ea0', isNight: 1 },
+  { hour: 5, sky: '#131b30', fog: '#131b30', ambient: 0.32, sunIntensity: 0.16, sunColor: '#5a6ea0', isNight: 1 },
   { hour: 6.5, sky: '#f2966b', fog: '#e8a888', ambient: 0.4, sunIntensity: 0.75, sunColor: '#ffb366', isNight: 0.35 },
   { hour: 8, sky: '#bcd9f0', fog: '#bcd9f0', ambient: 0.65, sunIntensity: 1.15, sunColor: '#fff6e0', isNight: 0 },
   { hour: 12.5, sky: '#cfe8ff', fog: '#d9ecff', ambient: 0.78, sunIntensity: 1.35, sunColor: '#ffffff', isNight: 0 },
   { hour: 17, sky: '#bcd9f0', fog: '#bcd9f0', ambient: 0.6, sunIntensity: 1.0, sunColor: '#fff0d8', isNight: 0 },
   { hour: 18.7, sky: '#f9734f', fog: '#e8896a', ambient: 0.38, sunIntensity: 0.65, sunColor: '#ff7a45', isNight: 0.35 },
-  { hour: 20, sky: '#0e1526', fog: '#0e1526', ambient: 0.2, sunIntensity: 0.08, sunColor: '#3b4a6b', isNight: 1 },
-  { hour: 24, sky: '#050810', fog: '#050810', ambient: 0.16, sunIntensity: 0.04, sunColor: '#37456b', isNight: 1 },
+  { hour: 20, sky: '#182136', fog: '#182136', ambient: 0.34, sunIntensity: 0.18, sunColor: '#5a6ea0', isNight: 1 },
+  { hour: 24, sky: '#0c1224', fog: '#0c1224', ambient: 0.3, sunIntensity: 0.14, sunColor: '#5a6ea0', isNight: 1 },
 ];
 
 function lerp(a: number, b: number, t: number): number {

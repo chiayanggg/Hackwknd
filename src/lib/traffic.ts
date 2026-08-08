@@ -68,3 +68,63 @@ export function buildAdjacency(district: DistrictData): Map<number, RoadEdge[]> 
   }
   return adjacency;
 }
+
+export function roundaboutRadius(node: RoadNode): number {
+  return 6 + Math.min(4, node.degree);
+}
+
+function headingIntoNode(edge: RoadEdge, nodeId: number): { x: number; z: number } {
+  const pts = edge.points;
+  const atEnd = edge.nodeIds[edge.nodeIds.length - 1] === nodeId;
+  const a = atEnd ? pts[Math.max(0, pts.length - 2)] : pts[Math.min(pts.length - 1, 1)];
+  const b = atEnd ? pts[pts.length - 1] : pts[0];
+  const dx = b.x - a.x;
+  const dz = b.z - a.z;
+  const len = Math.hypot(dx, dz) || 1;
+  return { x: dx / len, z: dz / len };
+}
+
+function headingOutOfNode(edge: RoadEdge, nodeId: number): { x: number; z: number } {
+  const pts = edge.points;
+  const atStart = edge.nodeIds[0] === nodeId;
+  const a = atStart ? pts[0] : pts[pts.length - 1];
+  const b = atStart ? pts[Math.min(pts.length - 1, 1)] : pts[Math.max(0, pts.length - 2)];
+  const dx = b.x - a.x;
+  const dz = b.z - a.z;
+  const len = Math.hypot(dx, dz) || 1;
+  return { x: dx / len, z: dz / len };
+}
+
+/** A synthetic, car-local road edge tracing the arc of a roundabout ring from where a
+ * car enters (continuing straight off `entryEdge`) to where it exits (continuing
+ * straight onto `exitEdge`), always circulating the same rotational direction. Not part
+ * of `district.roads` — built fresh per car per roundabout entry, consumed once. */
+export function buildRoundaboutArc(node: RoadNode, entryEdge: RoadEdge, exitEdge: RoadEdge, nodeId: number): RoadEdge {
+  const R = roundaboutRadius(node);
+  const into = headingIntoNode(entryEdge, nodeId);
+  const out = headingOutOfNode(exitEdge, nodeId);
+  const entryTheta = Math.atan2(into.x, into.z);
+  const exitTheta = Math.atan2(out.x, out.z);
+  const twoPi = Math.PI * 2;
+  const arcSpan = ((exitTheta - entryTheta) % twoPi + twoPi) % twoPi || twoPi;
+
+  const steps = 10;
+  const points = Array.from({ length: steps + 1 }, (_, s) => {
+    const theta = entryTheta + (arcSpan * s) / steps;
+    return { x: node.pos.x + R * Math.sin(theta), z: node.pos.z + R * Math.cos(theta) };
+  });
+
+  const entryMarker = -(2_000_000 + nodeId * 100 + 1);
+  const exitMarker = -(2_000_000 + nodeId * 100 + 2);
+
+  return {
+    id: `ring-${nodeId}-${Math.random().toString(36).slice(2, 8)}`,
+    wayId: -(3_000_000 + nodeId),
+    name: 'Roundabout',
+    highwayClass: 'residential',
+    baseLanes: 1,
+    points,
+    nodeIds: [entryMarker, exitMarker],
+    lengthM: Math.max(4, R * arcSpan),
+  };
+}

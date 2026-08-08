@@ -2,7 +2,7 @@ import { useMemo, useRef, type ReactNode } from 'react';
 import { Canvas, useFrame, type ThreeEvent } from '@react-three/fiber';
 import { OrbitControls, Html, useGLTF, Clone } from '@react-three/drei';
 import * as THREE from 'three';
-import type { CityEdits, DistrictData, EdgeMetrics, RoadEdge, RoadNode } from '../types';
+import type { CityEdits, DistrictData, EdgeMetrics, NodeEdit, RoadEdge, RoadNode } from '../types';
 import type { ToolDef } from '../data/tools';
 import { PLOT_ICON } from '../data/tools';
 import { buildCenterline, buildEdgeLines, buildRoadRibbon, pointAtT } from '../lib/roadGeometry';
@@ -16,7 +16,16 @@ import {
   MODEL_YAW_OFFSET,
   TREE_MODEL_KEYS,
 } from '../lib/models';
-import { buildAdjacency, computeApproachGroups, junctionControlsThisApproach, STOP_LINE_DISTANCE_M, type ApproachGroups } from '../lib/traffic';
+import {
+  buildAdjacency,
+  buildRoundaboutArc,
+  computeApproachGroups,
+  junctionControlsThisApproach,
+  roundaboutRadius,
+  signalColor,
+  STOP_LINE_DISTANCE_M,
+  type ApproachGroups,
+} from '../lib/traffic';
 import { congestionColor } from '../lib/ruleEngine';
 import { computeSkyState } from '../lib/daynight';
 import { IconWarning } from './icons';
@@ -114,13 +123,14 @@ function Road({ edge, edits, metric, armedTool, onPlace }: { edge: RoadEdge; edi
   );
 }
 
+const ROUNDABOUT_MODEL_RAW_DIAMETER_M = 20.4;
+
 function JunctionNode({ node, edits, armedTool, onPlace }: { node: RoadNode; edits: CityEdits; armedTool: ToolDef | null; onPlace: (id: number) => void }) {
   const trafficLightGltf = useGLTF(MODEL_URLS.trafficLight);
-  const bushGltf = useGLTF(MODEL_URLS.parkBush);
-  const hedgeGltf = useGLTF(MODEL_URLS.parkHedgeCorner);
+  const roundaboutGltf = useGLTF(MODEL_URLS.roundabout);
   const edit = edits.nodeEdits[node.id];
   const acceptable = armedTool?.target === 'node';
-  const radius = 6 + Math.min(4, node.degree);
+  const radius = roundaboutRadius(node);
 
   const handleClick = (e: ThreeEvent<MouseEvent>) => {
     if (armedTool?.target === 'node') {
@@ -130,38 +140,15 @@ function JunctionNode({ node, edits, armedTool, onPlace }: { node: RoadNode; edi
   };
 
   if (edit?.roundabout) {
-    const bushSpots = [0, 1, 2, 3].map((i) => (i / 4) * Math.PI * 2 + 0.4);
+    const modelScale = (radius * 2) / ROUNDABOUT_MODEL_RAW_DIAMETER_M;
     return (
       <group position={[node.pos.x, 0.08, node.pos.z]}>
-        {/* curb: pale ring just outside the circulating lane */}
-        <mesh rotation={[-Math.PI / 2, 0, 0]} onClick={handleClick}>
-          <ringGeometry args={[radius * 0.98, radius * 1.08, 40]} />
-          <meshStandardMaterial color="#a8a29e" />
+        <Clone object={roundaboutGltf.scene} scale={modelScale} castShadow receiveShadow />
+        {/* invisible, slightly larger than the model, so it stays clickable for editing */}
+        <mesh rotation={[-Math.PI / 2, 0, 0]} onClick={handleClick} visible={false}>
+          <circleGeometry args={[radius * 1.1, 24]} />
+          <meshBasicMaterial transparent opacity={0} />
         </mesh>
-        {/* circulating lane */}
-        <mesh rotation={[-Math.PI / 2, 0, 0]} onClick={handleClick}>
-          <ringGeometry args={[radius * 0.55, radius * 0.98, 40]} />
-          <meshStandardMaterial color="#3a3733" />
-        </mesh>
-        {/* faint yield markings just inside the outer curb */}
-        <mesh position={[0, 0.01, 0]} rotation={[-Math.PI / 2, 0, 0]}>
-          <ringGeometry args={[radius * 0.92, radius * 0.96, 40]} />
-          <meshBasicMaterial color="#f8fafc" transparent opacity={0.35} depthWrite={false} />
-        </mesh>
-        {/* central island — curb + landscaped green */}
-        <mesh position={[0, 0.015, 0]} rotation={[-Math.PI / 2, 0, 0]}>
-          <circleGeometry args={[radius * 0.55, 28]} />
-          <meshStandardMaterial color="#8a8580" />
-        </mesh>
-        <mesh position={[0, 0.03, 0]} rotation={[-Math.PI / 2, 0, 0]}>
-          <circleGeometry args={[radius * 0.48, 24]} />
-          <meshStandardMaterial color="#3f6212" />
-        </mesh>
-        {bushSpots.map((a, i) => (
-          <group key={i} position={[Math.cos(a) * radius * 0.3, 0, Math.sin(a) * radius * 0.3]} rotation={[0, a, 0]}>
-            <Clone object={(i % 2 === 0 ? bushGltf : hedgeGltf).scene} scale={MODEL_SCALE.parkBush} />
-          </group>
-        ))}
       </group>
     );
   }
@@ -178,10 +165,46 @@ function JunctionNode({ node, edits, armedTool, onPlace }: { node: RoadNode; edi
         </Html>
       ) : (
         <>
-          <Clone object={trafficLightGltf.scene} scale={MODEL_SCALE.trafficLight} position={[radius * 1.35, 0, radius * 1.35]} rotation={[0, (Math.PI * 5) / 4, 0]} />
-          <Clone object={trafficLightGltf.scene} scale={MODEL_SCALE.trafficLight} position={[-radius * 1.35, 0, -radius * 1.35]} rotation={[0, Math.PI / 4, 0]} />
+          <TrafficLightPost gltf={trafficLightGltf} position={[radius * 1.35, 0, radius * 1.35]} rotationY={(Math.PI * 5) / 4} nodeEdit={edit} group={0} />
+          <TrafficLightPost gltf={trafficLightGltf} position={[-radius * 1.35, 0, -radius * 1.35]} rotationY={Math.PI / 4} nodeEdit={edit} group={1} />
         </>
       )}
+    </group>
+  );
+}
+
+function TrafficLightPost({
+  gltf,
+  position,
+  rotationY,
+  nodeEdit,
+  group,
+}: {
+  gltf: ReturnType<typeof useGLTF>;
+  position: [number, number, number];
+  rotationY: number;
+  nodeEdit: NodeEdit | undefined;
+  group: 0 | 1;
+}) {
+  const lampRef = useRef<THREE.Mesh>(null);
+  const lightRef = useRef<THREE.PointLight>(null);
+  const lampHeight = 3.2 * MODEL_SCALE.trafficLight;
+
+  useFrame((state) => {
+    const color = signalColor(nodeEdit, group, state.clock.elapsedTime);
+    const hex = color === 'red' ? '#ef4444' : '#22c55e';
+    if (lampRef.current) (lampRef.current.material as THREE.MeshBasicMaterial).color.set(hex);
+    if (lightRef.current) lightRef.current.color.set(hex);
+  });
+
+  return (
+    <group position={position} rotation={[0, rotationY, 0]}>
+      <Clone object={gltf.scene} scale={MODEL_SCALE.trafficLight} />
+      <mesh ref={lampRef} position={[0, lampHeight, 0]}>
+        <sphereGeometry args={[0.35, 8, 8]} />
+        <meshBasicMaterial color="#22c55e" />
+      </mesh>
+      <pointLight ref={lightRef} position={[0, lampHeight, 0]} color="#22c55e" intensity={2.5} distance={12} decay={2} />
     </group>
   );
 }
@@ -369,6 +392,12 @@ interface CarDesc {
   forward: boolean; // true: travelling nodeIds[0] -> nodeIds[last] (t increasing)
   modelKey: (typeof CAR_MODEL_KEYS)[number];
   currentSpeedFrac: number; // eased fraction-of-path/sec — this is what actually moves the car
+  laneIndex: number; // which lane within its direction (0 = closest to centerline)
+  ringExit?: { edge: RoadEdge; nodeId: number }; // set while circulating a roundabout arc
+}
+
+function lanesPerDirection(edge: RoadEdge, edits: CityEdits): number {
+  return Math.max(1, Math.floor(edgeLanes(edge, edits) / 2));
 }
 
 function edgeLanes(edge: RoadEdge, edits: CityEdits): number {
@@ -398,12 +427,14 @@ function Cars({ district, edits, metrics }: { district: DistrictData; edits: Cit
     district.roads.forEach((edge, ei) => {
       const count = Math.max(1, Math.min(5, edge.baseLanes * 2));
       for (let i = 0; i < count; i++) {
+        const perDir = lanesPerDirection(edge, edits);
         list.push({
           edge,
           t: (i / count + hash(ei * 13 + i) * 0.3) % 1,
           forward: hash(ei * 17 + i * 3) > 0.5,
           modelKey: CAR_MODEL_KEYS[Math.floor(hash(ei * 31 + i * 7) * CAR_MODEL_KEYS.length)],
           currentSpeedFrac: 0,
+          laneIndex: i % perDir,
         });
       }
     });
@@ -475,27 +506,52 @@ function Cars({ district, edits, metrics }: { district: DistrictData; edits: Cit
       }
 
       if (car.t >= 1 || car.t <= 0) {
-        const arrivedAt = car.forward ? car.edge.nodeIds[car.edge.nodeIds.length - 1] : car.edge.nodeIds[0];
-        const options = (adjacency.get(arrivedAt) ?? []).filter((e) => e.id !== car.edge.id);
-        if (options.length > 0) {
-          const next = options[Math.floor(hash(elapsed * 97 + i * 53) * options.length)];
-          car.edge = next;
-          car.forward = next.nodeIds[0] === arrivedAt;
-          // Nudge just off the boundary (not exactly 0/1) — otherwise a car that's
-          // immediately blocked on the new edge re-triggers this arrival branch next
-          // frame and re-routes again before ever actually driving the segment,
-          // which looks like cars skipping/teleporting through junctions.
+        if (car.ringExit) {
+          // just finished circulating a roundabout arc — go straight to the exit
+          // road picked when it entered, no re-check needed (already yielded on entry)
+          const exit = car.ringExit;
+          car.edge = exit.edge;
+          car.forward = exit.edge.nodeIds[0] === exit.nodeId;
+          car.laneIndex = Math.min(car.laneIndex, lanesPerDirection(exit.edge, edits) - 1);
           car.t = car.forward ? 0.01 : 0.99;
+          car.ringExit = undefined;
         } else {
-          // dead end — turn around in place, same nudge
-          car.forward = !car.forward;
-          car.t = car.forward ? 0.01 : 0.99;
+          const arrivedAt = car.forward ? car.edge.nodeIds[car.edge.nodeIds.length - 1] : car.edge.nodeIds[0];
+          const node = district.nodes.get(arrivedAt);
+          const options = (adjacency.get(arrivedAt) ?? []).filter((e) => e.id !== car.edge.id);
+          if (options.length > 0 && node && edits.nodeEdits[arrivedAt]?.roundabout) {
+            // entering a roundabout: circulate the ring to a chosen exit instead of
+            // jumping straight across the intersection
+            const exitEdge = options[Math.floor(hash(elapsed * 97 + i * 53) * options.length)];
+            car.edge = buildRoundaboutArc(node, car.edge, exitEdge, arrivedAt);
+            car.forward = true;
+            car.laneIndex = 0;
+            car.t = 0.01;
+            car.ringExit = { edge: exitEdge, nodeId: arrivedAt };
+          } else if (options.length > 0) {
+            const next = options[Math.floor(hash(elapsed * 97 + i * 53) * options.length)];
+            car.edge = next;
+            car.forward = next.nodeIds[0] === arrivedAt;
+            car.laneIndex = Math.min(car.laneIndex, lanesPerDirection(next, edits) - 1);
+            // Nudge just off the boundary (not exactly 0/1) — otherwise a car that's
+            // immediately blocked on the new edge re-triggers this arrival branch next
+            // frame and re-routes again before ever actually driving the segment,
+            // which looks like cars skipping/teleporting through junctions.
+            car.t = car.forward ? 0.01 : 0.99;
+          } else {
+            // dead end — turn around in place, same nudge
+            car.forward = !car.forward;
+            car.t = car.forward ? 0.01 : 0.99;
+          }
         }
       }
 
       const { pos, dir } = pointAtT(car.edge.points, car.t);
-      const lanes = edgeLanes(car.edge, edits);
-      const laneOffset = (lanes * LANE_WIDTH) / 4; // keep each direction inside its own half of the road
+      const perDir = lanesPerDirection(car.edge, edits);
+      // Distance from the road's centerline to the middle of this car's lane, on its
+      // own side of the road (lane 0 = closest to centerline, matches left-hand traffic
+      // keeping to the near-side lane; higher lane indices sit further toward the curb).
+      const laneOffset = (Math.min(car.laneIndex, perDir - 1) + 0.5) * LANE_WIDTH;
       const nx = -dir.z;
       const nz = dir.x;
       const sign = car.forward ? 1 : -1;
@@ -669,10 +725,15 @@ function StreetLights({ district, isNight }: { district: DistrictData; isNight: 
   }, [district]);
 
   const lightRefs = useRef<(THREE.PointLight | null)[]>([]);
+  const bulbRefs = useRef<(THREE.Mesh | null)[]>([]);
   useFrame(() => {
-    const intensity = isNight > 0.4 ? (isNight - 0.4) * 20 : 0;
+    const intensity = isNight > 0.3 ? (isNight - 0.3) * 32 : 0;
+    const bulbOpacity = Math.max(0.05, Math.min(1, isNight > 0.3 ? (isNight - 0.3) * 1.6 : 0.05));
     lightRefs.current.forEach((l) => {
       if (l) l.intensity = intensity;
+    });
+    bulbRefs.current.forEach((b) => {
+      if (b) (b.material as THREE.MeshBasicMaterial).opacity = bulbOpacity;
     });
   });
 
@@ -681,7 +742,11 @@ function StreetLights({ district, isNight }: { district: DistrictData; isNight: 
       {spots.map((s, i) => (
         <group key={i} position={[s.x, 0, s.z]}>
           <Clone object={gltf.scene} scale={MODEL_SCALE.streetLight} />
-          <pointLight ref={(el) => { lightRefs.current[i] = el; }} position={[0, 6, 0]} color="#ffd9a0" intensity={0} distance={22} decay={2} />
+          <mesh ref={(el) => { bulbRefs.current[i] = el; }} position={[0, 6, 0]}>
+            <sphereGeometry args={[0.3, 8, 8]} />
+            <meshBasicMaterial color="#ffe4a8" transparent opacity={0.05} />
+          </mesh>
+          <pointLight ref={(el) => { lightRefs.current[i] = el; }} position={[0, 6, 0]} color="#ffd9a0" intensity={0} distance={38} decay={1.6} />
         </group>
       ))}
     </group>
@@ -744,7 +809,7 @@ export default function CityScene({ district, edits, metrics, hour, armedTool, o
           castShadow
           shadow-mapSize={[1024, 1024]}
         />
-        <hemisphereLight args={[sky.skyColor, '#1a2e05', 0.25 + 0.15 * (1 - sky.isNight)]} />
+        <hemisphereLight args={[sky.skyColor, '#1a2e05', 0.35 + 0.2 * (1 - sky.isNight)]} />
 
         <Ground district={district} armedTool={armedTool} onPlaceGround={onPlaceGround} />
 
@@ -791,3 +856,4 @@ useGLTF.preload(MODEL_URLS.chargingStation);
 useGLTF.preload(MODEL_URLS.streetLight);
 useGLTF.preload(MODEL_URLS.parkBush);
 useGLTF.preload(MODEL_URLS.parkHedgeCorner);
+useGLTF.preload(MODEL_URLS.roundabout);
