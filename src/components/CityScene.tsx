@@ -420,7 +420,18 @@ interface CarDesc {
 }
 
 function lanesPerDirection(edge: RoadEdge, edits: CityEdits): number {
-  return Math.max(1, Math.floor(edgeLanes(edge, edits) / 2));
+  const total = edgeLanes(edge, edits);
+  // A one-way edge's lane count is already all-one-direction (that's what the OSM tag
+  // means) — don't halve it the way a real two-way road's total lane count needs to be.
+  return edge.oneway ? Math.max(1, total) : Math.max(1, Math.floor(total / 2));
+}
+
+// Can a car enter `edge` at `atNodeId` and legally drive it? Oneway edges only allow
+// entry at nodeIds[0] (driving nodeIds[0] -> last, our "forward") — entering at the far
+// end would mean driving it backward against the tagged direction.
+function canEnterEdgeAt(edge: RoadEdge, atNodeId: number): boolean {
+  if (!edge.oneway) return true;
+  return edge.nodeIds[0] === atNodeId;
 }
 
 function edgeLanes(edge: RoadEdge, edits: CityEdits): number {
@@ -454,7 +465,7 @@ function Cars({ district, edits, metrics }: { district: DistrictData; edits: Cit
         list.push({
           edge,
           t: (i / count + hash(ei * 13 + i) * 0.3) % 1,
-          forward: hash(ei * 17 + i * 3) > 0.5,
+          forward: edge.oneway || hash(ei * 17 + i * 3) > 0.5,
           modelKey: CAR_MODEL_KEYS[Math.floor(hash(ei * 31 + i * 7) * CAR_MODEL_KEYS.length)],
           currentSpeedFrac: 0,
           laneIndex: i % perDir,
@@ -541,7 +552,7 @@ function Cars({ district, edits, metrics }: { district: DistrictData; edits: Cit
         } else {
           const arrivedAt = car.forward ? car.edge.nodeIds[car.edge.nodeIds.length - 1] : car.edge.nodeIds[0];
           const node = district.nodes.get(arrivedAt);
-          const options = (adjacency.get(arrivedAt) ?? []).filter((e) => e.id !== car.edge.id);
+          const options = (adjacency.get(arrivedAt) ?? []).filter((e) => e.id !== car.edge.id && canEnterEdgeAt(e, arrivedAt));
           // Roundabout edits are stored against the cluster's controlling node, which may
           // not be this exact raw endpoint if it's a consolidated multi-fragment junction.
           const controllingNodeId = district.clusterRepOf.get(arrivedAt) ?? arrivedAt;
@@ -565,7 +576,10 @@ function Cars({ district, edits, metrics }: { district: DistrictData; edits: Cit
             // which looks like cars skipping/teleporting through junctions.
             car.t = car.forward ? 0.01 : 0.99;
           } else {
-            // dead end — turn around in place, same nudge
+            // Genuine dead end (rare) — no legal onward edge, including on a oneway
+            // street. Turning around in place isn't realistic there, but it's the only
+            // way to avoid a car freezing on screen forever; true dead ends are uncommon
+            // enough after the canEnterEdgeAt filter above that this shouldn't come up often.
             car.forward = !car.forward;
             car.t = car.forward ? 0.01 : 0.99;
           }

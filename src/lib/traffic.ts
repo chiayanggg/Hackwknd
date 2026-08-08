@@ -164,6 +164,7 @@ export function buildRoundaboutArc(node: RoadNode, entryEdge: RoadEdge, exitEdge
     name: 'Roundabout',
     highwayClass: 'residential',
     baseLanes: 1,
+    oneway: true, // a roundabout ring only ever circulates one way
     points,
     nodeIds: [entryMarker, exitMarker],
     lengthM: Math.max(4, R * arcSpan),

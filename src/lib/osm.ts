@@ -184,15 +184,21 @@ function parseOverpass(data: { elements: OverpassElement[] }): { roads: RoadEdge
       const points = el.nodes.map((id) => nodeLatLon.get(id)).filter((v): v is { lat: number; lon: number } => !!v).map((v) => project(v.lat, v.lon, KL_ORIGIN));
       if (points.length < 2) continue;
       const laneTag = parseInt(el.tags.lanes ?? '', 10);
+      // oneway=-1 means the way is tagged against its real traffic direction — flip it
+      // so nodeIds[0] -> nodeIds[last] (our "forward") matches which way cars actually go.
+      const reversed = el.tags.oneway === '-1';
+      const orderedPoints = reversed ? [...points].reverse() : points;
+      const orderedNodes = reversed ? [...el.nodes].reverse() : el.nodes;
       roads.push({
         id: `w${el.id}`,
         wayId: el.id,
         name: el.tags.name || el.tags.highway,
         highwayClass: el.tags.highway,
-        baseLanes: Number.isFinite(laneTag) && laneTag > 0 ? laneTag : defaultLanes(el.tags.highway),
-        points,
-        nodeIds: el.nodes,
-        lengthM: pathLength(points),
+        baseLanes: Math.min(4, Number.isFinite(laneTag) && laneTag > 0 ? laneTag : defaultLanes(el.tags.highway)),
+        oneway: el.tags.oneway === 'yes' || el.tags.oneway === 'true' || el.tags.oneway === '1' || reversed,
+        points: orderedPoints,
+        nodeIds: orderedNodes,
+        lengthM: pathLength(orderedPoints),
       });
     } else if (el.tags.building) {
       const points = el.nodes.map((id) => nodeLatLon.get(id)).filter((v): v is { lat: number; lon: number } => !!v).map((v) => project(v.lat, v.lon, KL_ORIGIN));
@@ -221,12 +227,12 @@ function fallbackDistrict(): { roads: RoadEdge[]; buildings: BuildingFootprint[]
   // Each arm is its own way (split at the node it meets), matching how OSM itself
   // splits ways at junctions — the node-degree junction heuristic below depends on it.
   const roads: RoadEdge[] = [
-    { id: 'f1', wayId: -1, name: 'Jalan Tun Razak', highwayClass: 'primary', baseLanes: 3, nodeIds: [1, 2], points: [{ x: -220, z: 0 }, { x: 0, z: 0 }], lengthM: 220 },
-    { id: 'f2', wayId: -2, name: 'Jalan Tun Razak', highwayClass: 'primary', baseLanes: 3, nodeIds: [2, 3], points: [{ x: 0, z: 0 }, { x: 220, z: 0 }], lengthM: 220 },
-    { id: 'f3', wayId: -3, name: 'Jalan Ampang', highwayClass: 'secondary', baseLanes: 2, nodeIds: [4, 2], points: [{ x: 0, z: -180 }, { x: 0, z: 0 }], lengthM: 180 },
-    { id: 'f4', wayId: -4, name: 'Jalan Ampang', highwayClass: 'secondary', baseLanes: 2, nodeIds: [2, 5], points: [{ x: 0, z: 0 }, { x: 0, z: 180 }], lengthM: 180 },
-    { id: 'f5', wayId: -5, name: 'Jalan Sejahtera', highwayClass: 'residential', baseLanes: 1, nodeIds: [1, 6], points: [{ x: -220, z: 0 }, { x: -220, z: 150 }], lengthM: 150 },
-    { id: 'f6', wayId: -6, name: 'Jalan Damai', highwayClass: 'residential', baseLanes: 1, nodeIds: [3, 7], points: [{ x: 220, z: 0 }, { x: 220, z: -150 }], lengthM: 150 },
+    { id: 'f1', wayId: -1, name: 'Jalan Tun Razak', highwayClass: 'primary', baseLanes: 3, oneway: false, nodeIds: [1, 2], points: [{ x: -220, z: 0 }, { x: 0, z: 0 }], lengthM: 220 },
+    { id: 'f2', wayId: -2, name: 'Jalan Tun Razak', highwayClass: 'primary', baseLanes: 3, oneway: false, nodeIds: [2, 3], points: [{ x: 0, z: 0 }, { x: 220, z: 0 }], lengthM: 220 },
+    { id: 'f3', wayId: -3, name: 'Jalan Ampang', highwayClass: 'secondary', baseLanes: 2, oneway: false, nodeIds: [4, 2], points: [{ x: 0, z: -180 }, { x: 0, z: 0 }], lengthM: 180 },
+    { id: 'f4', wayId: -4, name: 'Jalan Ampang', highwayClass: 'secondary', baseLanes: 2, oneway: false, nodeIds: [2, 5], points: [{ x: 0, z: 0 }, { x: 0, z: 180 }], lengthM: 180 },
+    { id: 'f5', wayId: -5, name: 'Jalan Sejahtera', highwayClass: 'residential', baseLanes: 1, oneway: false, nodeIds: [1, 6], points: [{ x: -220, z: 0 }, { x: -220, z: 150 }], lengthM: 150 },
+    { id: 'f6', wayId: -6, name: 'Jalan Damai', highwayClass: 'residential', baseLanes: 1, oneway: false, nodeIds: [3, 7], points: [{ x: 220, z: 0 }, { x: 220, z: -150 }], lengthM: 150 },
   ];
   const buildings: BuildingFootprint[] = Array.from({ length: 16 }).map((_, i) => {
     const col = i % 4;

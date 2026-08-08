@@ -18,6 +18,7 @@ export interface RoadEdge {
   name: string;
   highwayClass: string;
   baseLanes: number;
+  oneway: boolean; // e.g. Jalan Tun Razak is mapped as two separate one-way carriageways, not one two-way road
   points: Vec2[]; // polyline in scene meters
   nodeIds: number[]; // OSM node ids along the polyline (first/last are endpoints)
   lengthM: number;
