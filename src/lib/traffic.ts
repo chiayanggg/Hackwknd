@@ -8,16 +8,56 @@ export const STOP_LINE_DISTANCE_M = 9;
 
 export type ApproachGroups = Map<string, 0 | 1>; // edgeId -> group, per junction node
 
+function membersByRep(district: DistrictData): Map<number, number[]> {
+  const result = new Map<number, number[]>();
+  for (const [member, rep] of district.clusterRepOf) {
+    const arr = result.get(rep);
+    if (arr) arr.push(member);
+    else result.set(rep, [member]);
+  }
+  return result;
+}
+
+export interface JunctionApproach {
+  edge: RoadEdge;
+  headingToEnd: boolean; // true = this edge's *last* point is the junction end
+  controllerNodeId: number; // the cluster's representative node (what edits/signals are keyed by)
+}
+
+/** Every real arm of every junction — a "junction" is a whole cluster of nearby OSM
+ * nodes consolidated into one real intersection (see clusterJunctions in osm.ts), so
+ * this gathers arms from every member of the cluster, not just the one node that
+ * stayed flagged as the controller, and drops the short internal links between
+ * cluster members (those aren't arms, they're the fragments being consolidated away).
+ * Shared by signal-group assignment and by the stop-line/crossing visuals so both
+ * agree on exactly which edges count as "at this junction". */
+export function junctionApproaches(district: DistrictData): JunctionApproach[] {
+  const byRep = membersByRep(district);
+  const list: JunctionApproach[] = [];
+  for (const node of district.nodes.values()) {
+    if (!node.isJunction) continue;
+    const members = new Set(byRep.get(node.id) ?? [node.id]);
+    for (const edge of district.roads) {
+      const a = edge.nodeIds[0];
+      const b = edge.nodeIds[edge.nodeIds.length - 1];
+      const memberA = members.has(a);
+      const memberB = members.has(b);
+      if (memberA && memberB) continue; // internal connector within the cluster, not a real arm
+      if (memberB) list.push({ edge, headingToEnd: true, controllerNodeId: node.id });
+      if (memberA) list.push({ edge, headingToEnd: false, controllerNodeId: node.id });
+    }
+  }
+  return list;
+}
+
 /** Split the edges touching each junction into two alternating "approach groups", the
  * same way a real signal controller pairs opposite/adjacent approaches on one phase. */
 export function computeApproachGroups(district: DistrictData): Map<number, ApproachGroups> {
   const result = new Map<number, ApproachGroups>();
-  for (const node of district.nodes.values()) {
-    if (!node.isJunction) continue;
-    const touching = district.roads.filter((e) => e.nodeIds[0] === node.id || e.nodeIds[e.nodeIds.length - 1] === node.id);
-    const groups: ApproachGroups = new Map();
-    touching.forEach((e, i) => groups.set(e.id, (i % 2) as 0 | 1));
-    result.set(node.id, groups);
+  for (const approach of junctionApproaches(district)) {
+    const groups = result.get(approach.controllerNodeId) ?? new Map<string, 0 | 1>();
+    if (!groups.has(approach.edge.id)) groups.set(approach.edge.id, (groups.size % 2) as 0 | 1);
+    result.set(approach.controllerNodeId, groups);
   }
   return result;
 }
@@ -41,7 +81,8 @@ export function edgeGroupAtNode(groupsByNode: Map<number, ApproachGroups>, nodeI
 }
 
 export function nodeAt(district: DistrictData, edge: RoadEdge, end: 'start' | 'end'): RoadNode | undefined {
-  const id = end === 'start' ? edge.nodeIds[0] : edge.nodeIds[edge.nodeIds.length - 1];
+  const rawId = end === 'start' ? edge.nodeIds[0] : edge.nodeIds[edge.nodeIds.length - 1];
+  const id = district.clusterRepOf.get(rawId) ?? rawId;
   return district.nodes.get(id);
 }
 

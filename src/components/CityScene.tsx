@@ -20,6 +20,7 @@ import {
   buildAdjacency,
   buildRoundaboutArc,
   computeApproachGroups,
+  junctionApproaches,
   junctionControlsThisApproach,
   roundaboutRadius,
   signalColor,
@@ -125,11 +126,10 @@ function Road({ edge, edits, metric, armedTool, onPlace }: { edge: RoadEdge; edi
   );
 }
 
-const ROUNDABOUT_MODEL_RAW_DIAMETER_M = 20.4;
-
 function JunctionNode({ node, edits, armedTool, onPlace }: { node: RoadNode; edits: CityEdits; armedTool: ToolDef | null; onPlace: (id: number) => void }) {
   const trafficLightGltf = useGLTF(MODEL_URLS.trafficLight);
-  const roundaboutGltf = useGLTF(MODEL_URLS.roundabout);
+  const bushGltf = useGLTF(MODEL_URLS.parkBush);
+  const hedgeGltf = useGLTF(MODEL_URLS.parkHedgeCorner);
   const edit = edits.nodeEdits[node.id];
   const acceptable = armedTool?.target === 'node';
   const radius = roundaboutRadius(node);
@@ -142,15 +142,36 @@ function JunctionNode({ node, edits, armedTool, onPlace }: { node: RoadNode; edi
   };
 
   if (edit?.roundabout) {
-    const modelScale = (radius * 2) / ROUNDABOUT_MODEL_RAW_DIAMETER_M;
+    // No roundabout model matched the scene well, so this stays procedural: curb,
+    // circulating lane, faint yield markings, and a landscaped central island.
+    const bushSpots = [0, 1, 2, 3].map((i) => (i / 4) * Math.PI * 2 + 0.4);
     return (
-      <group position={[node.pos.x, 0.08, node.pos.z]}>
-        <Clone object={roundaboutGltf.scene} scale={modelScale} castShadow receiveShadow />
-        {/* invisible, slightly larger than the model, so it stays clickable for editing */}
-        <mesh rotation={[-Math.PI / 2, 0, 0]} onClick={handleClick} visible={false}>
-          <circleGeometry args={[radius * 1.1, 24]} />
-          <meshBasicMaterial transparent opacity={0} />
+      <group position={[node.pos.x, 0.08, node.pos.z]} onClick={handleClick}>
+        <mesh rotation={[-Math.PI / 2, 0, 0]}>
+          <ringGeometry args={[radius * 0.98, radius * 1.08, 40]} />
+          <meshStandardMaterial color="#a8a29e" />
         </mesh>
+        <mesh rotation={[-Math.PI / 2, 0, 0]}>
+          <ringGeometry args={[radius * 0.55, radius * 0.98, 40]} />
+          <meshStandardMaterial color="#3a3733" />
+        </mesh>
+        <mesh position={[0, 0.01, 0]} rotation={[-Math.PI / 2, 0, 0]}>
+          <ringGeometry args={[radius * 0.92, radius * 0.96, 40]} />
+          <meshBasicMaterial color="#f8fafc" transparent opacity={0.35} depthWrite={false} />
+        </mesh>
+        <mesh position={[0, 0.015, 0]} rotation={[-Math.PI / 2, 0, 0]}>
+          <circleGeometry args={[radius * 0.55, 28]} />
+          <meshStandardMaterial color="#8a8580" />
+        </mesh>
+        <mesh position={[0, 0.03, 0]} rotation={[-Math.PI / 2, 0, 0]}>
+          <circleGeometry args={[radius * 0.48, 24]} />
+          <meshStandardMaterial color="#3f6212" />
+        </mesh>
+        {bushSpots.map((a, i) => (
+          <group key={i} position={[Math.cos(a) * radius * 0.3, 0, Math.sin(a) * radius * 0.3]} rotation={[0, a, 0]}>
+            <Clone object={(i % 2 === 0 ? bushGltf : hedgeGltf).scene} scale={MODEL_SCALE.parkBush} />
+          </group>
+        ))}
       </group>
     );
   }
@@ -521,7 +542,10 @@ function Cars({ district, edits, metrics }: { district: DistrictData; edits: Cit
           const arrivedAt = car.forward ? car.edge.nodeIds[car.edge.nodeIds.length - 1] : car.edge.nodeIds[0];
           const node = district.nodes.get(arrivedAt);
           const options = (adjacency.get(arrivedAt) ?? []).filter((e) => e.id !== car.edge.id);
-          if (options.length > 0 && node && edits.nodeEdits[arrivedAt]?.roundabout) {
+          // Roundabout edits are stored against the cluster's controlling node, which may
+          // not be this exact raw endpoint if it's a consolidated multi-fragment junction.
+          const controllingNodeId = district.clusterRepOf.get(arrivedAt) ?? arrivedAt;
+          if (options.length > 0 && node && edits.nodeEdits[controllingNodeId]?.roundabout) {
             // entering a roundabout: circulate the ring to a chosen exit instead of
             // jumping straight across the intersection
             const exitEdge = options[Math.floor(hash(elapsed * 97 + i * 53) * options.length)];
@@ -617,25 +641,9 @@ function Trees({ district }: { district: DistrictData }) {
   );
 }
 
-interface Approach {
-  edge: RoadEdge;
-  headingToEnd: boolean;
-}
-
 function StopLights({ district, edits }: { district: DistrictData; edits: CityEdits }) {
   const groupsByNode = useMemo(() => computeApproachGroups(district), [district]);
-
-  const approaches = useMemo(() => {
-    const list: Approach[] = [];
-    for (const node of district.nodes.values()) {
-      if (!node.isJunction) continue;
-      district.roads.forEach((edge) => {
-        if (edge.nodeIds[edge.nodeIds.length - 1] === node.id) list.push({ edge, headingToEnd: true });
-        if (edge.nodeIds[0] === node.id) list.push({ edge, headingToEnd: false });
-      });
-    }
-    return list;
-  }, [district]);
+  const approaches = useMemo(() => junctionApproaches(district), [district]);
 
   const refs = useRef<(THREE.Mesh | null)[]>([]);
 
@@ -667,17 +675,7 @@ function StopLights({ district, edits }: { district: DistrictData; edits: CityEd
 }
 
 function PedestrianCrossings({ district, edits }: { district: DistrictData; edits: CityEdits }) {
-  const approaches = useMemo(() => {
-    const list: Approach[] = [];
-    for (const node of district.nodes.values()) {
-      if (!node.isJunction) continue;
-      district.roads.forEach((edge) => {
-        if (edge.nodeIds[edge.nodeIds.length - 1] === node.id) list.push({ edge, headingToEnd: true });
-        if (edge.nodeIds[0] === node.id) list.push({ edge, headingToEnd: false });
-      });
-    }
-    return list;
-  }, [district]);
+  const approaches = useMemo(() => junctionApproaches(district), [district]);
 
   return (
     <group>
@@ -925,4 +923,3 @@ useGLTF.preload(MODEL_URLS.chargingStation);
 useGLTF.preload(MODEL_URLS.streetLight);
 useGLTF.preload(MODEL_URLS.parkBush);
 useGLTF.preload(MODEL_URLS.parkHedgeCorner);
-useGLTF.preload(MODEL_URLS.roundabout);

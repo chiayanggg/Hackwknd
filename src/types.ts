@@ -40,6 +40,11 @@ export interface DistrictData {
   originName: string;
   roads: RoadEdge[];
   nodes: Map<number, RoadNode>;
+  // Maps every raw junction-fragment node id to the one node id that actually
+  // controls it — several close-together OSM nodes at one real crossroad share
+  // the same representative here. Identity map for anything that isn't part of
+  // a cluster.
+  clusterRepOf: Map<number, number>;
   buildings: BuildingFootprint[];
   bounds: { minX: number; maxX: number; minZ: number; maxZ: number };
   source: 'overpass' | 'fallback';

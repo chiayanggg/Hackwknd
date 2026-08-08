@@ -56,6 +56,99 @@ function buildNodeIndex(roads: RoadEdge[]): Map<number, RoadNode> {
   return nodes;
 }
 
+// A real crossroad in OSM is often several nodes a few meters apart (turn-lane
+// splits, slightly offset stop lines) linked by short segments, rather than one
+// clean point where exactly 4 roads meet. Left alone, each of those becomes its
+// own controlled "junction" — a car crosses what should read as one intersection
+// but gets stopped 2-3 times in quick succession. This clusters junction nodes
+// connected by short links into one logical intersection: only the cluster's
+// most-connected node stays a controlled junction (recomputed to the real arm
+// count, not the raw fragment count); the rest become plain pass-through points.
+const JUNCTION_CLUSTER_MERGE_M = 22;
+
+function clusterJunctions(roads: RoadEdge[], nodes: Map<number, RoadNode>): Map<number, number> {
+  const rawJunctionIds = [...nodes.values()].filter((n) => n.isJunction).map((n) => n.id);
+  const parent = new Map<number, number>();
+  for (const id of rawJunctionIds) parent.set(id, id);
+
+  function find(x: number): number {
+    let r = x;
+    while (parent.get(r) !== r) r = parent.get(r)!;
+    while (parent.get(x) !== r) {
+      const next = parent.get(x)!;
+      parent.set(x, r);
+      x = next;
+    }
+    return r;
+  }
+  function union(a: number, b: number) {
+    const ra = find(a);
+    const rb = find(b);
+    if (ra !== rb) parent.set(ra, rb);
+  }
+
+  for (const road of roads) {
+    const a = road.nodeIds[0];
+    const b = road.nodeIds[road.nodeIds.length - 1];
+    if (parent.has(a) && parent.has(b) && road.lengthM < JUNCTION_CLUSTER_MERGE_M) union(a, b);
+  }
+
+  const clusterMembers = new Map<number, number[]>();
+  for (const id of rawJunctionIds) {
+    const root = find(id);
+    const arr = clusterMembers.get(root);
+    if (arr) arr.push(id);
+    else clusterMembers.set(root, [id]);
+  }
+
+  // External degree per cluster: distinct roads touching any member, excluding
+  // roads that start and end inside the same cluster (those are the short
+  // internal links being consolidated away, not real arms).
+  const externalEdgesByRoot = new Map<number, Set<string>>();
+  const rootOfMember = new Map<number, number>();
+  for (const [root, members] of clusterMembers) for (const m of members) rootOfMember.set(m, root);
+
+  for (const road of roads) {
+    const a = road.nodeIds[0];
+    const b = road.nodeIds[road.nodeIds.length - 1];
+    const rootA = rootOfMember.get(a);
+    const rootB = rootOfMember.get(b);
+    if (rootA !== undefined && rootA === rootB) continue; // internal connector, not an arm
+    for (const root of [rootA, rootB]) {
+      if (root === undefined) continue;
+      const set = externalEdgesByRoot.get(root);
+      if (set) set.add(road.id);
+      else externalEdgesByRoot.set(root, new Set([road.id]));
+    }
+  }
+
+  const repOf = new Map<number, number>();
+  for (const [root, members] of clusterMembers) {
+    // representative = original member with the highest raw touch-degree
+    let rep = members[0];
+    let bestDegree = nodes.get(rep)?.degree ?? 0;
+    for (const m of members) {
+      const d = nodes.get(m)?.degree ?? 0;
+      if (d > bestDegree) {
+        rep = m;
+        bestDegree = d;
+      }
+    }
+    const externalDegree = externalEdgesByRoot.get(root)?.size ?? nodes.get(rep)?.degree ?? 0;
+    for (const m of members) {
+      repOf.set(m, rep);
+      const node = nodes.get(m)!;
+      if (m === rep) {
+        nodes.set(m, { ...node, degree: externalDegree, isJunction: externalDegree >= 3 });
+      } else {
+        nodes.set(m, { ...node, isJunction: false });
+      }
+    }
+  }
+
+  return repOf;
+}
+
 function computeBounds(roads: RoadEdge[], buildings: BuildingFootprint[]) {
   let minX = Infinity;
   let maxX = -Infinity;
@@ -183,12 +276,14 @@ export async function loadDistrict(): Promise<DistrictData> {
   }
 
   const nodes = buildNodeIndex(roads);
+  const clusterRepOf = clusterJunctions(roads, nodes);
   const bounds = computeBounds(roads, buildings);
 
   return {
     originName: 'Jalan Tun Razak, Kuala Lumpur',
     roads,
     nodes,
+    clusterRepOf,
     buildings,
     bounds,
     source,
