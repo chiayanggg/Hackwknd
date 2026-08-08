@@ -1,4 +1,4 @@
-import { useMemo, useRef, type ReactNode } from 'react';
+import { useMemo, useRef, useState, type ReactNode } from 'react';
 import { Canvas, useFrame, type ThreeEvent } from '@react-three/fiber';
 import { OrbitControls, Html, useGLTF, Clone } from '@react-three/drei';
 import * as THREE from 'three';
@@ -417,6 +417,7 @@ function PlacedItems({ edits, onRemove }: { edits: CityEdits; onRemove: (id: str
 }
 
 interface CarDesc {
+  id: string;
   edge: RoadEdge;
   t: number;
   forward: boolean; // true: travelling nodeIds[0] -> nodeIds[last] (t increasing)
@@ -448,6 +449,33 @@ function edgeLanes(edge: RoadEdge, edits: CityEdits): number {
 const BRAKE_ZONE_M = 26; // start slowing this far from a red light/closed roundabout gate
 const ACCEL_RESPONSIVENESS = 2.4; // higher = snappier speed changes (exponential ease rate)
 const MIN_FOLLOW_GAP_M = 7; // never end up closer than this to the car ahead, same edge+direction
+const MAX_CARS_PER_EDGE = 9; // hard cap so a jammed road doesn't spawn an unbounded pile
+const SPAWN_CHECK_INTERVAL_SEC = 1.5; // how often to reassess "does this road need more cars"
+
+function baseCarCount(edge: RoadEdge): number {
+  return Math.max(1, Math.min(5, edge.baseLanes * 2));
+}
+
+// How many cars a road "should" have right now — scales up with live congestion so a
+// peak-hour jam actually looks like a jam (more cars, more of them queued at lights)
+// instead of the same handful of cars just driving slower.
+function targetCarCount(edge: RoadEdge, congestion: number): number {
+  const factor = clamp(0.6 + congestion * 1.8, 0.6, 2.6);
+  return Math.max(1, Math.min(MAX_CARS_PER_EDGE, Math.round(baseCarCount(edge) * factor)));
+}
+
+function spawnCar(edge: RoadEdge, edits: CityEdits, seed: number): CarDesc {
+  const perDir = lanesPerDirection(edge, edits);
+  return {
+    id: `car-${edge.id}-${seed}-${Math.random().toString(36).slice(2, 8)}`,
+    edge,
+    t: hash(seed * 13),
+    forward: edge.oneway || hash(seed * 17) > 0.5,
+    modelKey: CAR_MODEL_KEYS[Math.floor(hash(seed * 31) * CAR_MODEL_KEYS.length)],
+    currentSpeedFrac: 0,
+    laneIndex: Math.floor(hash(seed * 23) * perDir),
+  };
+}
 
 function Cars({ district, edits, metrics }: { district: DistrictData; edits: CityEdits; metrics: Map<string, EdgeMetrics> }) {
   // Fixed, known set of models — safe to call useGLTF unconditionally per key (drei caches by URL).
@@ -460,27 +488,46 @@ function Cars({ district, edits, metrics }: { district: DistrictData; edits: Cit
   const groupsByNode = useMemo(() => computeApproachGroups(district), [district]);
   const adjacency = useMemo(() => buildAdjacency(district), [district]);
 
-  // Spawn once per district load (not per edit/period) — count comes from road class/lane
-  // count, not live congestion, so placing a tool doesn't respawn/scatter every car on screen.
-  // Speed and stop behaviour below are still read live from `metrics` every frame.
-  const cars = useMemo(() => {
+  // Spawn a light baseline once per district load — congestion-driven growth (below)
+  // tops each road up toward its live target without ever touching/rescattering the
+  // cars that already exist, so placing a tool or the clock ticking never resets anyone
+  // already on screen; it only ever adds more.
+  const [cars, setCars] = useState<CarDesc[]>(() => {
     const list: CarDesc[] = [];
     district.roads.forEach((edge, ei) => {
-      const count = Math.max(1, Math.min(5, edge.baseLanes * 2));
+      const count = baseCarCount(edge);
       for (let i = 0; i < count; i++) {
-        const perDir = lanesPerDirection(edge, edits);
-        list.push({
-          edge,
-          t: (i / count + hash(ei * 13 + i) * 0.3) % 1,
-          forward: edge.oneway || hash(ei * 17 + i * 3) > 0.5,
-          modelKey: CAR_MODEL_KEYS[Math.floor(hash(ei * 31 + i * 7) * CAR_MODEL_KEYS.length)],
-          currentSpeedFrac: 0,
-          laneIndex: i % perDir,
-        });
+        const car = spawnCar(edge, edits, ei * 97 + i * 7);
+        car.t = (i / count + hash(ei * 13 + i) * 0.3) % 1;
+        list.push(car);
       }
     });
     return list;
-  }, [district.roads]);
+  });
+
+  const spawnCheckAccum = useRef(0);
+  useFrame((_, delta) => {
+    spawnCheckAccum.current += delta;
+    if (spawnCheckAccum.current < SPAWN_CHECK_INTERVAL_SEC) return;
+    spawnCheckAccum.current = 0;
+
+    setCars((prev) => {
+      const countByEdge = new Map<string, number>();
+      for (const c of prev) countByEdge.set(c.edge.id, (countByEdge.get(c.edge.id) ?? 0) + 1);
+
+      const additions: CarDesc[] = [];
+      district.roads.forEach((edge, ei) => {
+        const congestion = metrics.get(edge.id)?.congestion ?? 0;
+        const target = targetCarCount(edge, congestion);
+        const current = countByEdge.get(edge.id) ?? 0;
+        for (let k = current; k < target; k++) {
+          additions.push(spawnCar(edge, edits, ei * 5000 + k * 31 + Math.round(performance.now())));
+        }
+      });
+
+      return additions.length > 0 ? [...prev, ...additions] : prev;
+    });
+  });
 
   const refs = useRef<(THREE.Group | null)[]>([]);
 
@@ -614,7 +661,7 @@ function Cars({ district, edits, metrics }: { district: DistrictData; edits: Cit
   return (
     <group>
       {cars.map((car, i) => (
-        <group key={i} ref={(el) => { refs.current[i] = el; }} castShadow>
+        <group key={car.id} ref={(el) => { refs.current[i] = el; }} castShadow>
           <Clone object={carGltfs[car.modelKey].scene} scale={MODEL_SCALE[car.modelKey]} />
         </group>
       ))}
