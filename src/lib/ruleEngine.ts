@@ -14,13 +14,6 @@ const CONGESTION_BAND_COLOR: Record<CongestionBand, string> = {
   red: '#ef4444',
 };
 
-const CONGESTION_BAND_EMOJI: Record<CongestionBand, string> = {
-  green: '🟢',
-  yellow: '🟡',
-  orange: '🟠',
-  red: '🔴',
-};
-
 // congestion is volume/capacity, can exceed 1.0 when oversubscribed — banded 0-25/25-50/50-75/75+
 // as a 0-100 "congestion score" the way real traffic dashboards present it.
 export function congestionBand(congestion: number): CongestionBand {
@@ -33,10 +26,6 @@ export function congestionBand(congestion: number): CongestionBand {
 
 export function congestionColor(congestion: number): string {
   return CONGESTION_BAND_COLOR[congestionBand(congestion)];
-}
-
-export function congestionEmoji(congestion: number): string {
-  return CONGESTION_BAND_EMOJI[congestionBand(congestion)];
 }
 
 function classBaseFlow(highwayClass: string): number {

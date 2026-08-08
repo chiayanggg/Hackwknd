@@ -18,6 +18,7 @@ import {
 } from '../lib/models';
 import { buildAdjacency, computeApproachGroups, junctionControlsThisApproach, STOP_LINE_DISTANCE_M, type ApproachGroups } from '../lib/traffic';
 import { congestionColor } from '../lib/ruleEngine';
+import { IconWarning } from './icons';
 
 function clamp(v: number, min: number, max: number): number {
   return Math.max(min, Math.min(max, v));
@@ -147,7 +148,7 @@ function JunctionNode({ node, edits, armedTool, onPlace }: { node: RoadNode; edi
       </mesh>
       {edit?.trafficLights === false ? (
         <Html center distanceFactor={140}>
-          <span style={{ fontSize: 18 }}>⚠️</span>
+          <IconWarning style={{ width: 20, height: 20, color: '#f87171', filter: 'drop-shadow(0 1px 2px rgba(0,0,0,.6))' }} />
         </Html>
       ) : (
         <>
@@ -283,11 +284,12 @@ function PlacedItems({ edits, onRemove }: { edits: CityEdits; onRemove: (id: str
           );
         }
 
+        const ItemIcon = PLOT_ICON[item.type];
         return (
           <group key={item.id} position={[item.pos.x, 0, item.pos.z]}>
             {body}
             <Html position={[0, item.type === 'park' || item.type === 'lake' ? 3 : 14, 0]} center distanceFactor={140}>
-              <div style={{ fontSize: 20, filter: 'drop-shadow(0 1px 2px rgba(0,0,0,.6))' }}>{PLOT_ICON[item.type]}</div>
+              <ItemIcon style={{ width: 20, height: 20, color: '#f8fafc', filter: 'drop-shadow(0 1px 2px rgba(0,0,0,.6))' }} />
             </Html>
           </group>
         );

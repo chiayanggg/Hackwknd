@@ -26,13 +26,14 @@ export default function Toolbox({ mode, armedToolId, onArm }: Props) {
                 : 'bg-white/5 hover:bg-white/15'
             }`}
           >
-            {tool.icon}
+            <tool.icon className="w-5 h-5" />
           </button>
         ))}
       </div>
       {armed && (
-        <p className="max-w-[180px] rounded-lg border border-sky-500/40 bg-sky-950/80 backdrop-blur-md px-2.5 py-1.5 text-[11px] text-sky-200 shadow-xl">
-          {armed.icon} {armed.hint} to place <strong>{armed.label}</strong>.
+        <p className="max-w-[180px] flex items-center gap-1.5 rounded-lg border border-sky-500/40 bg-sky-950/80 backdrop-blur-md px-2.5 py-1.5 text-[11px] text-sky-200 shadow-xl">
+          <armed.icon className="w-4 h-4 shrink-0" />
+          {armed.hint} to place <strong>{armed.label}</strong>.
         </p>
       )}
     </div>

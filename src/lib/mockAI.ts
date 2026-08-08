@@ -26,8 +26,22 @@ export function generateAnalysis(edits: CityEdits, derived: DerivedMetrics, mode
   const explanation = buildExplanation(recommendation, derived, hasRoundabout);
   const safetyNote = buildSafetyNote(edits, derived);
   const sandboxReactions = buildSandboxReactions(edits, derived, recommendation);
+  const confidencePct = computeConfidence(derived);
 
-  return { recommendation, explanation, safetyNote, sandboxReactions };
+  return { recommendation, explanation, safetyNote, sandboxReactions, confidencePct };
+}
+
+// Not a real model confidence — just how far the numbers sit from a decision boundary.
+// Numbers right on the edge of a threshold get a lower confidence than ones clearly past it.
+function computeConfidence(derived: DerivedMetrics): number {
+  const distances = [
+    Math.abs(derived.worstCongestion - HIGH_CONGESTION_THRESHOLD),
+    Math.abs(derived.avgCongestion - 0.7),
+    Math.abs(derived.avgCongestion - 0.95),
+  ];
+  const minDist = Math.min(...distances);
+  const confidence = 65 + Math.min(30, minDist * 150);
+  return Math.round(Math.max(60, Math.min(95, confidence)));
 }
 
 function buildExplanation(recommendation: AnalysisResult['recommendation'], derived: DerivedMetrics, hasRoundabout: boolean): string {
@@ -65,6 +79,6 @@ function buildSandboxReactions(edits: CityEdits, derived: DerivedMetrics, recomm
   if (edits.placedItems.some((p) => p.type === 'evStation')) lines.push('EV drivers cheer.');
   const hasRoundabout = Object.values(edits.nodeEdits).some((e) => e.roundabout);
   if (hasRoundabout) lines.push(recommendation === 'suitable' ? 'Traffic flows like a dream.' : 'Rush hour gridlock incoming.');
-  if (lines.length === 0) lines.push('No major change yet — drag a tool onto the city.');
+  if (lines.length === 0) lines.push('No major change yet — pick a tool and click the city.');
   return lines;
 }

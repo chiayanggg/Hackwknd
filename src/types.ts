@@ -101,6 +101,7 @@ export interface AnalysisResult {
   explanation: string;
   safetyNote: string;
   sandboxReactions: string[];
+  confidencePct: number; // how decisive the underlying numbers are, not a real ML confidence
 }
 
 export const TIME_MULTIPLIERS: Record<TimePeriod, number> = {

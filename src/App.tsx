@@ -2,6 +2,7 @@ import { useEffect, useMemo, useState } from 'react';
 import { loadDistrict } from './lib/osm';
 import { computeMetricsForAllPeriods, computeDerivedMetrics, aggregateMetrics } from './lib/costEngine';
 import { generateAnalysis } from './lib/mockAI';
+import { IconClose } from './components/icons';
 import type { BuildingToolId, CityEdits, DistrictData, Mode, TimePeriod } from './types';
 import { emptyEdits } from './types';
 import type { ToolDef } from './data/tools';
@@ -162,8 +163,8 @@ export default function App() {
         <div className="absolute top-0 right-0 z-30 h-full w-full sm:w-[420px] overflow-y-auto border-l border-white/10 bg-slate-950/95 backdrop-blur-md p-5 space-y-5">
           <div className="flex items-center justify-between">
             <h2 className="text-sm font-semibold text-slate-200">Full report</h2>
-            <button onClick={() => setReportOpen(false)} className="text-slate-400 hover:text-slate-200 text-lg leading-none">
-              ✕
+            <button onClick={() => setReportOpen(false)} className="text-slate-400 hover:text-slate-200">
+              <IconClose className="w-4 h-4" />
             </button>
           </div>
           <KpiCards
