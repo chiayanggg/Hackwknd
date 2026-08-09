@@ -254,31 +254,77 @@ function fallbackDistrict(): { roads: RoadEdge[]; buildings: BuildingFootprint[]
   return { roads, buildings };
 }
 
+// Overpass is a shared public server that rate-limits under repeated use. Without
+// caching, every reload is a coin flip between the real KL data and the offline
+// fallback grid (whichever one Overpass feels like giving that moment) — which reads
+// as "the map keeps changing" even though nothing in the app changed. Caching the last
+// successful fetch makes the district stable across reloads instead of flickering
+// between two completely different layouts.
+const CACHE_KEY = `smart-city-district-cache:${KL_ORIGIN.lat},${KL_ORIGIN.lon},${BBOX_DELTA}`;
+const CACHE_TTL_MS = 24 * 60 * 60 * 1000;
+
+interface CachedDistrict {
+  cachedAt: number;
+  roads: RoadEdge[];
+  buildings: BuildingFootprint[];
+}
+
+function readCache(): CachedDistrict | null {
+  try {
+    const raw = localStorage.getItem(CACHE_KEY);
+    if (!raw) return null;
+    return JSON.parse(raw) as CachedDistrict;
+  } catch {
+    return null;
+  }
+}
+
+function writeCache(roads: RoadEdge[], buildings: BuildingFootprint[]) {
+  try {
+    localStorage.setItem(CACHE_KEY, JSON.stringify({ cachedAt: Date.now(), roads, buildings }));
+  } catch {
+    // localStorage unavailable (private browsing, quota, etc.) — fine, just skip caching
+  }
+}
+
 export async function loadDistrict(): Promise<DistrictData> {
   let roads: RoadEdge[];
   let buildings: BuildingFootprint[];
   let source: 'overpass' | 'fallback' = 'overpass';
 
-  try {
-    const { lat, lon } = KL_ORIGIN;
-    const bbox = `${lat - BBOX_DELTA},${lon - BBOX_DELTA},${lat + BBOX_DELTA},${lon + BBOX_DELTA}`;
-    const query = `[out:json][timeout:25];(way["highway"~"${HIGHWAY_CLASSES}"](${bbox});way["building"](${bbox}););out body;>;out skel qt;`;
-    const controller = new AbortController();
-    const timeout = setTimeout(() => controller.abort(), 15000);
-    const res = await fetch('https://overpass-api.de/api/interpreter', {
-      method: 'POST',
-      body: `data=${encodeURIComponent(query)}`,
-      signal: controller.signal,
-    });
-    clearTimeout(timeout);
-    if (!res.ok) throw new Error(`overpass http ${res.status}`);
-    const data = await res.json();
-    ({ roads, buildings } = parseOverpass(data));
-    if (roads.length === 0) throw new Error('overpass returned no roads');
-  } catch (err) {
-    console.warn('[osm] live Overpass fetch failed, using offline fallback district:', err);
-    ({ roads, buildings } = fallbackDistrict());
-    source = 'fallback';
+  const cached = readCache();
+  if (cached && Date.now() - cached.cachedAt < CACHE_TTL_MS) {
+    ({ roads, buildings } = cached);
+  } else {
+    try {
+      const { lat, lon } = KL_ORIGIN;
+      const bbox = `${lat - BBOX_DELTA},${lon - BBOX_DELTA},${lat + BBOX_DELTA},${lon + BBOX_DELTA}`;
+      const query = `[out:json][timeout:25];(way["highway"~"${HIGHWAY_CLASSES}"](${bbox});way["building"](${bbox}););out body;>;out skel qt;`;
+      const controller = new AbortController();
+      const timeout = setTimeout(() => controller.abort(), 15000);
+      const res = await fetch('https://overpass-api.de/api/interpreter', {
+        method: 'POST',
+        body: `data=${encodeURIComponent(query)}`,
+        signal: controller.signal,
+      });
+      clearTimeout(timeout);
+      if (!res.ok) throw new Error(`overpass http ${res.status}`);
+      const data = await res.json();
+      ({ roads, buildings } = parseOverpass(data));
+      if (roads.length === 0) throw new Error('overpass returned no roads');
+      writeCache(roads, buildings);
+    } catch (err) {
+      if (cached) {
+        // Live fetch failed (likely rate-limited) but we have real data from before,
+        // even if stale — that's still better than the synthetic fallback grid.
+        console.warn('[osm] live Overpass fetch failed, reusing stale cached district:', err);
+        ({ roads, buildings } = cached);
+      } else {
+        console.warn('[osm] live Overpass fetch failed, using offline fallback district:', err);
+        ({ roads, buildings } = fallbackDistrict());
+        source = 'fallback';
+      }
+    }
   }
 
   const nodes = buildNodeIndex(roads);
