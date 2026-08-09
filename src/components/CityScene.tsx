@@ -1,6 +1,7 @@
 import { useMemo, useRef, useState, type ReactNode } from 'react';
-import { Canvas, useFrame, type ThreeEvent } from '@react-three/fiber';
+import { Canvas, useFrame, useThree, type ThreeEvent } from '@react-three/fiber';
 import { OrbitControls, Html, useGLTF, Clone } from '@react-three/drei';
+import { EffectComposer, Bloom, Vignette } from '@react-three/postprocessing';
 import * as THREE from 'three';
 import type { CityEdits, DistrictData, EdgeMetrics, NodeEdit, RoadEdge, RoadNode } from '../types';
 import type { ToolDef } from '../data/tools';
@@ -449,18 +450,20 @@ function edgeLanes(edge: RoadEdge, edits: CityEdits): number {
 const BRAKE_ZONE_M = 26; // start slowing this far from a red light/closed roundabout gate
 const ACCEL_RESPONSIVENESS = 2.4; // higher = snappier speed changes (exponential ease rate)
 const MIN_FOLLOW_GAP_M = 7; // never end up closer than this to the car ahead, same edge+direction
-const MAX_CARS_PER_EDGE = 9; // hard cap so a jammed road doesn't spawn an unbounded pile
+const MAX_CARS_PER_EDGE = 4; // hard cap so a jammed road doesn't spawn an unbounded pile
+const MAX_CARS_TOTAL = 90; // hard ceiling across the whole district, regardless of road count
 const SPAWN_CHECK_INTERVAL_SEC = 1.5; // how often to reassess "does this road need more cars"
 
 function baseCarCount(edge: RoadEdge): number {
-  return Math.max(1, Math.min(5, edge.baseLanes * 2));
+  return Math.max(1, Math.min(2, edge.baseLanes));
 }
 
 // How many cars a road "should" have right now — scales up with live congestion so a
 // peak-hour jam actually looks like a jam (more cars, more of them queued at lights)
-// instead of the same handful of cars just driving slower.
+// instead of the same handful of cars just driving slower. Kept modest per-road (and
+// capped in total) — this is a rendering budget, not a real vehicle count.
 function targetCarCount(edge: RoadEdge, congestion: number): number {
-  const factor = clamp(0.6 + congestion * 1.8, 0.6, 2.6);
+  const factor = clamp(0.6 + congestion * 1.6, 0.6, 2.2);
   return Math.max(1, Math.min(MAX_CARS_PER_EDGE, Math.round(baseCarCount(edge) * factor)));
 }
 
@@ -495,8 +498,9 @@ function Cars({ district, edits, metrics }: { district: DistrictData; edits: Cit
   const [cars, setCars] = useState<CarDesc[]>(() => {
     const list: CarDesc[] = [];
     district.roads.forEach((edge, ei) => {
+      if (list.length >= MAX_CARS_TOTAL) return;
       const count = baseCarCount(edge);
-      for (let i = 0; i < count; i++) {
+      for (let i = 0; i < count && list.length < MAX_CARS_TOTAL; i++) {
         const car = spawnCar(edge, edits, ei * 97 + i * 7);
         car.t = (i / count + hash(ei * 13 + i) * 0.3) % 1;
         list.push(car);
@@ -512,18 +516,22 @@ function Cars({ district, edits, metrics }: { district: DistrictData; edits: Cit
     spawnCheckAccum.current = 0;
 
     setCars((prev) => {
+      if (prev.length >= MAX_CARS_TOTAL) return prev;
       const countByEdge = new Map<string, number>();
       for (const c of prev) countByEdge.set(c.edge.id, (countByEdge.get(c.edge.id) ?? 0) + 1);
 
       const additions: CarDesc[] = [];
-      district.roads.forEach((edge, ei) => {
+      let budget = MAX_CARS_TOTAL - prev.length;
+      for (let ei = 0; ei < district.roads.length && budget > 0; ei++) {
+        const edge = district.roads[ei];
         const congestion = metrics.get(edge.id)?.congestion ?? 0;
         const target = targetCarCount(edge, congestion);
         const current = countByEdge.get(edge.id) ?? 0;
-        for (let k = current; k < target; k++) {
+        for (let k = current; k < target && budget > 0; k++) {
           additions.push(spawnCar(edge, edits, ei * 5000 + k * 31 + Math.round(performance.now())));
+          budget--;
         }
-      });
+      }
 
       return additions.length > 0 ? [...prev, ...additions] : prev;
     });
@@ -661,7 +669,7 @@ function Cars({ district, edits, metrics }: { district: DistrictData; edits: Cit
   return (
     <group>
       {cars.map((car, i) => (
-        <group key={car.id} ref={(el) => { refs.current[i] = el; }} castShadow>
+        <group key={car.id} ref={(el) => { refs.current[i] = el; }}>
           <Clone object={carGltfs[car.modelKey].scene} scale={MODEL_SCALE[car.modelKey]} />
         </group>
       ))}
@@ -912,6 +920,32 @@ function Ground({ district, armedTool, onPlaceGround }: { district: DistrictData
   );
 }
 
+const INTRO_DURATION_SEC = 3.2;
+
+// A drone-style descending sweep on first load, from high directly overhead down into
+// the normal angled view — disables OrbitControls for its duration so the two don't
+// fight over the camera, then hands off cleanly.
+function CameraIntro({ start, end, target, onDone }: { start: THREE.Vector3; end: THREE.Vector3; target: THREE.Vector3; onDone: () => void }) {
+  const { camera } = useThree();
+  const t0 = useRef<number | null>(null);
+  const doneRef = useRef(false);
+
+  useFrame((state) => {
+    if (doneRef.current) return;
+    if (t0.current === null) t0.current = state.clock.elapsedTime;
+    const t = Math.min(1, (state.clock.elapsedTime - t0.current) / INTRO_DURATION_SEC);
+    const eased = 1 - Math.pow(1 - t, 3); // ease-out cubic — fast start, gentle settle
+    camera.position.lerpVectors(start, end, eased);
+    camera.lookAt(target);
+    if (t >= 1) {
+      doneRef.current = true;
+      onDone();
+    }
+  });
+
+  return null;
+}
+
 export default function CityScene({ district, edits, metrics, hour, armedTool, onPlaceNode, onPlaceEdge, onPlaceGround, onRemoveItem, accessibilityEnabled, accessibilityRoute }: Props) {
   const { minX, maxX, minZ, maxZ } = district.bounds;
   const cx = (minX + maxX) / 2;
@@ -925,13 +959,18 @@ export default function CityScene({ district, edits, metrics, hour, armedTool, o
   const sunX = cx + size * (sky.sunAzimuth01 * 2 - 1);
   const sunZ = cz + size * 0.4;
 
+  const [introDone, setIntroDone] = useState(false);
+  const cameraStart = useMemo(() => new THREE.Vector3(cx + size * 0.15, size * 3.6, cz), [cx, cz, size]);
+  const cameraEnd = useMemo(() => new THREE.Vector3(cx + size * 0.7, size * 0.9, cz + size * 0.9), [cx, cz, size]);
+  const cameraTarget = useMemo(() => new THREE.Vector3(cx, 0, cz), [cx, cz]);
+
   return (
     <div className="absolute inset-0" style={{ cursor: armedTool ? 'crosshair' : 'grab' }}>
       <Canvas
         shadows
         style={{ width: '100%', height: '100%', display: 'block' }}
         gl={{ logarithmicDepthBuffer: true }}
-        camera={{ position: [cx + size * 0.7, size * 0.9, cz + size * 0.9], fov: 45, near: 2, far: size * 6 }}
+        camera={{ position: [cameraStart.x, cameraStart.y, cameraStart.z], fov: 45, near: 2, far: size * 6 }}
       >
         <color attach="background" args={[sky.skyColor]} />
         <fog attach="fog" args={[sky.fogColor, size * (1.5 - 0.5 * sky.isNight), size * 5]} />
@@ -964,15 +1003,24 @@ export default function CityScene({ district, edits, metrics, hour, armedTool, o
         <PlacedItems edits={edits} onRemove={onRemoveItem} />
         <Cars district={district} edits={edits} metrics={metrics} />
 
-        <OrbitControls
-          target={[cx, 0, cz]}
-          minDistance={size * 0.05}
-          maxDistance={size * 4}
-          minPolarAngle={0.02}
-          maxPolarAngle={Math.PI * 0.495}
-          enableDamping
-          dampingFactor={0.08}
-        />
+        {introDone ? (
+          <OrbitControls
+            target={[cx, 0, cz]}
+            minDistance={size * 0.05}
+            maxDistance={size * 4}
+            minPolarAngle={0.02}
+            maxPolarAngle={Math.PI * 0.495}
+            enableDamping
+            dampingFactor={0.08}
+          />
+        ) : (
+          <CameraIntro start={cameraStart} end={cameraEnd} target={cameraTarget} onDone={() => setIntroDone(true)} />
+        )}
+
+        <EffectComposer multisampling={0}>
+          <Bloom luminanceThreshold={0.82} luminanceSmoothing={0.3} intensity={0.55} mipmapBlur radius={0.5} />
+          <Vignette eskil={false} offset={0.15} darkness={0.55} />
+        </EffectComposer>
       </Canvas>
     </div>
   );

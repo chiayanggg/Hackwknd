@@ -19,7 +19,7 @@ import SummaryMetricsStrip from './components/SummaryMetricsStrip';
 import MiniMap from './components/MiniMap';
 import KpiCards from './components/KpiCards';
 import BeforeAfter from './components/BeforeAfter';
-import { IconClose } from './components/icons';
+import { IconClose, IconBuilding } from './components/icons';
 import AccessibilityRoutesPanel, { type AccessibilityRoute } from './components/AccessibilityRoutesPanel';
 
 export default function App() {
@@ -115,8 +115,26 @@ export default function App() {
 
   if (!district || !metricsAtHour || !baselineMetricsAtHour || !derived || !analysis || !scenarioRows || !overallScore || !flowSeries) {
     return (
-      <div className="h-full bg-slate-950 text-slate-100 flex items-center justify-center p-6">
-        <p className="text-sm text-slate-400 animate-pulse">Loading real road &amp; building data for Kuala Lumpur…</p>
+      <div className="h-full bg-slate-950 text-slate-100 flex flex-col items-center justify-center gap-5 p-6">
+        <div className="flex items-center gap-2.5">
+          <div className="w-10 h-10 rounded-xl bg-sky-500/20 flex items-center justify-center text-sky-400">
+            <IconBuilding className="w-5 h-5" />
+          </div>
+          <span className="text-lg font-bold tracking-tight">Smart City Simulator</span>
+        </div>
+
+        {/* a little pulsing skyline while the real road/building data streams in */}
+        <div className="flex items-end gap-1.5 h-12">
+          {[10, 22, 14, 32, 18, 26, 12].map((h, i) => (
+            <div
+              key={i}
+              className="w-3 rounded-t-sm bg-sky-500/60 animate-pulse"
+              style={{ height: `${h * 1.1}px`, animationDelay: `${i * 0.12}s`, animationDuration: '1.4s' }}
+            />
+          ))}
+        </div>
+
+        <p className="text-sm text-slate-400">Loading real road &amp; building data for Kuala Lumpur…</p>
       </div>
     );
   }
